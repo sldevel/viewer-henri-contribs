@@ -88,10 +88,6 @@ LLApp* LLApp::sApplication = NULL;
 // and disables crashlogger
 bool LLApp::sDisableCrashlogger = false;
 
-// Local flag for whether or not to do logging in signal handlers.
-//static
-bool LLApp::sLogInSignal = false;
-
 // static
 // Keeps track of application status
 LLScalarCond<LLApp::EAppStatus> LLApp::sStatus{LLApp::APP_STATUS_STOPPED};
@@ -226,7 +222,7 @@ bool LLApp::parseCommandOptions(int argc, wchar_t** wargv)
         if(wargv[ii][0] != '-')
         {
             LL_INFOS() << "Did not find option identifier while parsing token: "
-                << wargv[ii] << LL_ENDL;
+                << (intptr_t)wargv[ii] << LL_ENDL;
             return false;
         }
         int offset = 1;
@@ -314,7 +310,7 @@ void LLApp::stepFrame()
 {
     LLFrameTimer::updateFrameTime();
     LLFrameTimer::updateFrameCount();
-    LLEventTimer::updateClass();
+    LLCallbackList::instance().callFunctions();
     mRunner.run();
 }
 
@@ -373,6 +369,9 @@ static std::map<LLApp::EAppStatus, const char*> statusDesc
 // static
 void LLApp::setStatus(EAppStatus status)
 {
+    auto status_it = statusDesc.find(status);
+    std::string status_text = status_it != statusDesc.end() ? std::string(status_it->second) : std::to_string(status);
+    LL_INFOS() << "status: " << status_text << LL_ENDL;
     // notify everyone waiting on sStatus any time its value changes
     sStatus.set_all(status);
 
@@ -381,18 +380,7 @@ void LLApp::setStatus(EAppStatus status)
     if (! LLEventPumps::wasDeleted())
     {
         // notify interested parties of status change
-        LLSD statsd;
-        auto found = statusDesc.find(status);
-        if (found != statusDesc.end())
-        {
-            statsd = found->second;
-        }
-        else
-        {
-            // unknown status? at least report value
-            statsd = LLSD::Integer(status);
-        }
-        LLEventPumps::instance().obtain("LLApp").post(llsd::map("status", statsd));
+        LLEventPumps::instance().obtain("LLApp").post(llsd::map("status", status_text));
     }
 }
 
@@ -604,6 +592,10 @@ void default_unix_signal_handler(int signum, siginfo_t *info, void *)
     // We do the somewhat sketchy operation of blocking in here until the error handler
     // has gracefully stopped the app.
 
+    // FIXME(brad) - we are using this handler for asynchronous signals as well, so sLogInSignal is currently
+    // disabled for safety.  we need to find a way to selectively reenable it when it is safe.
+    // see issue secondlife/viewer#2566
+
     if (LLApp::sLogInSignal)
     {
         LL_INFOS() << "Signal handler - Got signal " << signum << " - " << apr_signal_description_get(signum) << LL_ENDL;
@@ -681,6 +673,7 @@ void default_unix_signal_handler(int signum, siginfo_t *info, void *)
             {
                 LL_WARNS() << "Signal handler - Handling fatal signal!" << LL_ENDL;
             }
+
             if (LLApp::isError())
             {
                 // Received second fatal signal while handling first, just die right now
@@ -718,11 +711,11 @@ void default_unix_signal_handler(int signum, siginfo_t *info, void *)
             clear_signals();
             raise(signum);
             return;
-        } else {
-            if (LLApp::sLogInSignal)
-            {
-                LL_INFOS() << "Signal handler - Unhandled signal " << signum << ", ignoring!" << LL_ENDL;
-            }
+        }
+
+        if (LLApp::sLogInSignal)
+        {
+            LL_INFOS() << "Signal handler - Unhandled signal " << signum << ", ignoring!" << LL_ENDL;
         }
     }
 }

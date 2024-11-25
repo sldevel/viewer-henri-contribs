@@ -351,7 +351,7 @@ void LLSidepanelItemInfo::refreshFromItem(LLViewerInventoryItem* item)
 
     // Style for creator and owner links
     LLStyle::Params style_params;
-    LLColor4 link_color = LLUIColorTable::instance().getColor("HTMLLinkColor");
+    LLUIColor link_color = LLUIColorTable::instance().getColor("HTMLLinkColor");
     style_params.color = link_color;
     style_params.readonly_color = link_color;
     style_params.is_link = true; // link will be added later
@@ -483,7 +483,8 @@ void LLSidepanelItemInfo::refreshFromItem(LLViewerInventoryItem* item)
     }
     else
     {
-        std::string timeStr = getString("acquiredDate");
+        static bool use_24h = gSavedSettings.getBOOL("Use24HourClock");
+        std::string timeStr = use_24h ? getString("acquiredDate") : getString("acquiredDateAMPM");
         LLSD substitution;
         substitution["datetime"] = (S32) time_utc;
         LLStringUtil::format (timeStr, substitution);

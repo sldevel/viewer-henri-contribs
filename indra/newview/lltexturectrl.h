@@ -437,6 +437,7 @@ protected:
     LLButton*           mPipetteBtn;
     LLButton*           mSelectBtn;
     LLButton*           mCancelBtn;
+    LLView*             mPreviewWidget = nullptr;
 
 private:
     bool mCanApply;
@@ -446,6 +447,7 @@ private:
     S32 mMaxDim;
     S32 mMinDim;
     EPickInventoryType mInventoryPickType;
+    LLPickerSource mSelectionSource;
 
 
     texture_selected_callback mTextureSelectedCallback;

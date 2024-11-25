@@ -30,7 +30,9 @@
 #include "lllistcontextmenu.h"
 
 class LLCharacter;
+class LLCheckBoxCtrl;
 class LLNameListCtrl;
+class LLTextBox;
 
 class LLFloaterPerformance : public LLFloater
 {
@@ -46,7 +48,7 @@ public:
     void hidePanels();
     void showAutoadjustmentsPanel();
 
-    void detachItem(const LLUUID& item_id);
+    void detachObject(const LLUUID& obj_id);
 
     void onAvatarListRightClick(LLUICtrl* ctrl, S32 x, S32 y);
 
@@ -89,6 +91,13 @@ private:
 
     LLButton* mStartAutotuneBtn;
     LLButton* mStopAutotuneBtn;
+
+    LLTextBox* mTextWIPDesc = nullptr;
+    LLTextBox* mTextDisplayDesc = nullptr;
+    LLTextBox* mTextFPSLabel = nullptr;
+    LLTextBox* mTextFPSValue = nullptr;
+
+    LLCheckBoxCtrl* mCheckTuneContinous = nullptr;
 
     LLListContextMenu* mContextMenu;
 

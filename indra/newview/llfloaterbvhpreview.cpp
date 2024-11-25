@@ -285,7 +285,12 @@ bool LLFloaterBvhPreview::postBuild()
 
         // create data buffer for keyframe initialization
         S32 buffer_size = loaderp->getOutputSize();
-        U8* buffer = new U8[buffer_size];
+        U8* buffer = new(std::nothrow) U8[buffer_size];
+        if (!buffer)
+        {
+            LLError::LLUserWarningMsg::showOutOfMemory();
+            LL_ERRS() << "Bad memory allocation for buffer, size: " << buffer_size << LL_ENDL;
+        }
 
         LLDataPackerBinaryBuffer dp(buffer, buffer_size);
 
@@ -401,12 +406,17 @@ void LLFloaterBvhPreview::draw()
 
         gGL.getTexUnit(0)->bind(mAnimPreview);
 
-        gGL.begin( LLRender::QUADS );
+        gGL.begin(LLRender::TRIANGLES);
         {
             gGL.texCoord2f(0.f, 1.f);
             gGL.vertex2i(PREVIEW_HPAD, PREVIEW_TEXTURE_HEIGHT + PREVIEW_VPAD);
             gGL.texCoord2f(0.f, 0.f);
             gGL.vertex2i(PREVIEW_HPAD, PREVIEW_HPAD + PREF_BUTTON_HEIGHT + PREVIEW_HPAD);
+            gGL.texCoord2f(1.f, 0.f);
+            gGL.vertex2i(r.getWidth() - PREVIEW_HPAD, PREVIEW_HPAD + PREF_BUTTON_HEIGHT + PREVIEW_HPAD);
+
+            gGL.texCoord2f(0.f, 1.f);
+            gGL.vertex2i(PREVIEW_HPAD, PREVIEW_TEXTURE_HEIGHT + PREVIEW_VPAD);
             gGL.texCoord2f(1.f, 0.f);
             gGL.vertex2i(r.getWidth() - PREVIEW_HPAD, PREVIEW_HPAD + PREF_BUTTON_HEIGHT + PREVIEW_HPAD);
             gGL.texCoord2f(1.f, 1.f);
@@ -992,7 +1002,12 @@ void LLFloaterBvhPreview::onBtnOK(void* userdata)
         LLKeyframeMotion* motionp = (LLKeyframeMotion*)floaterp->mAnimPreview->getDummyAvatar()->findMotion(floaterp->mMotionID);
 
         S32 file_size = motionp->getFileSize();
-        U8* buffer = new U8[file_size];
+        U8* buffer = new(std::nothrow) U8[file_size];
+        if (!buffer)
+        {
+            LLError::LLUserWarningMsg::showOutOfMemory();
+            LL_ERRS() << "Bad memory allocation for buffer, size: " << file_size << LL_ENDL;
+        }
 
         LLDataPackerBinaryBuffer dp(buffer, file_size);
         if (motionp->serialize(dp))
@@ -1086,7 +1101,7 @@ bool    LLPreviewAnimation::render()
     gGL.matrixMode(LLRender::MM_PROJECTION);
     gGL.pushMatrix();
     gGL.loadIdentity();
-    gGL.ortho(0.0f, (F32)mFullWidth, 0.0f, (F32)mFullHeight, -1.0f, 1.0f);
+    gGL.ortho(0.0f, (F32)getFullWidth(), 0.0f, (F32)getFullHeight(), -1.0f, 1.0f);
 
     gGL.matrixMode(LLRender::MM_MODELVIEW);
     gGL.pushMatrix();
@@ -1098,7 +1113,7 @@ bool    LLPreviewAnimation::render()
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
     gGL.color4f(0.15f, 0.2f, 0.3f, 1.f);
 
-    gl_rect_2d_simple( mFullWidth, mFullHeight );
+    gl_rect_2d_simple(getFullWidth(), getFullHeight());
 
     gGL.matrixMode(LLRender::MM_PROJECTION);
     gGL.popMatrix();
@@ -1122,8 +1137,8 @@ bool    LLPreviewAnimation::render()
         target_pos + (mCameraOffset  * av_rot) );                                           // point of interest
 
     camera->setViewNoBroadcast(LLViewerCamera::getInstance()->getDefaultFOV() / mCameraZoom);
-    camera->setAspect((F32) mFullWidth / (F32) mFullHeight);
-    camera->setPerspective(false, mOrigin.mX, mOrigin.mY, mFullWidth, mFullHeight, false);
+    camera->setAspect((F32)getFullWidth() / (F32)getFullHeight());
+    camera->setPerspective(false, mOrigin.mX, mOrigin.mY, getFullWidth(), getFullHeight(), false);
 
     //SJB: Animation is updated in LLVOAvatar::updateCharacter
 

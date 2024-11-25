@@ -40,11 +40,8 @@ class LLImageRaw;
 class LLGLTexture : public LLTexture
 {
 public:
-    enum
-    {
-        MAX_IMAGE_SIZE_DEFAULT = 2048,
-        INVALID_DISCARD_LEVEL = 0x7fff
-    };
+    static const U32 MAX_IMAGE_SIZE_DEFAULT = 2048;
+    static const U32 INVALID_DISCARD_LEVEL = 0x7fff;
 
     enum EBoostLevel
     {
@@ -82,8 +79,6 @@ public:
     typedef enum
     {
         DELETED = 0,         //removed from memory
-        DELETION_CANDIDATE,  //ready to be removed from memory
-        INACTIVE,            //not be used for the last certain period (i.e., 30 seconds).
         ACTIVE,              //just being used, can become inactive if not being used for a certain time (10 seconds).
         NO_DELETE = 99       //stay in memory, can not be removed.
     } LLGLTextureState;
@@ -106,6 +101,7 @@ public:
 
     S32 getFullWidth() const { return mFullWidth; }
     S32 getFullHeight() const { return mFullHeight; }
+    U32 getTexelsPerImage() const { return mTexelsPerImage; }
 
     void generateGLTexture() ;
     void destroyGLTexture() ;
@@ -119,6 +115,9 @@ public:
     bool       hasGLTexture() const ;
     LLGLuint   getTexName() const ;
     bool       createGLTexture() ;
+
+    void getGLObjectLabel(std::string& label, bool& error) const;
+    std::string setGLObjectLabel(const std::string& prefix, bool append_texname = false) const;
 
     // Create a GL Texture from an image raw
     // discard_level - mip level, 0 for highest resultion mip
@@ -175,28 +174,27 @@ private:
     void init();
 
 protected:
-    void setTexelsPerImage();
+    void setDimensions(U32 width, U32 height);
+    void setTexelsPerImage(U32 tpi) { mTexelsPerImage = tpi; }
 
 public:
     /*virtual*/ LLImageGL* getGLTexture() const ;
 
 protected:
     S32 mBoostLevel;                // enum describing priority level
-    U32 mFullWidth;
-    U32 mFullHeight;
     bool mUseMipMaps;
     S8  mComponents;
-    U32 mTexelsPerImage;            // Texels per image.
     mutable S8  mNeedsGLTexture;
 
     //GL texture
     LLPointer<LLImageGL> mGLTexturep ;
     S8 mDontDiscard;            // Keep full res version of this image (for UI, etc)
-
-protected:
     LLGLTextureState  mTextureState ;
 
-
+private:
+    U32 mFullWidth;
+    U32 mFullHeight;
+    U32 mTexelsPerImage;
 };
 
 #endif // LL_GL_TEXTURE_H

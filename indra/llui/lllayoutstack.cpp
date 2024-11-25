@@ -36,8 +36,8 @@
 #include "lliconctrl.h"
 #include "boost/foreach.hpp"
 
-static const F32 MIN_FRACTIONAL_SIZE = 0.00001f;
-static const F32 MAX_FRACTIONAL_SIZE = 1.f;
+static constexpr F32 MIN_FRACTIONAL_SIZE = 0.00001f;
+static constexpr F32 MAX_FRACTIONAL_SIZE = 1.f;
 
 static LLDefaultChildRegistry::Register<LLLayoutStack> register_layout_stack("layout_stack");
 static LLLayoutStack::LayoutStackRegistry::Register<LLLayoutPanel> register_layout_panel("layout_panel");
@@ -86,10 +86,6 @@ void LLLayoutPanel::initFromParams(const Params& p)
 
 LLLayoutPanel::~LLLayoutPanel()
 {
-    // probably not necessary, but...
-    delete mResizeBar;
-    mResizeBar = NULL;
-
     gFocusMgr.removeKeyboardFocusWithoutCallback(this);
 }
 
@@ -209,7 +205,7 @@ LLLayoutStack::Params::Params()
     open_time_constant("open_time_constant", 0.02f),
     close_time_constant("close_time_constant", 0.03f),
     resize_bar_overlap("resize_bar_overlap", 1),
-    border_size("border_size", LLCachedControl<S32>(*LLUI::getInstance()->mSettingGroups["config"], "UIResizeBarHeight", 0)),
+    border_size("border_size", LLUI::getInstance()->mSettingGroups["config"]->getS32("UIResizeBarHeight")),
     show_drag_handle("show_drag_handle", false),
     drag_handle_first_indent("drag_handle_first_indent", 0),
     drag_handle_second_indent("drag_handle_second_indent", 0),
@@ -242,11 +238,9 @@ LLLayoutStack::LLLayoutStack(const LLLayoutStack::Params& p)
 
 LLLayoutStack::~LLLayoutStack()
 {
-    e_panel_list_t panels = mPanels; // copy list of panel pointers
-    mPanels.clear(); // clear so that removeChild() calls don't cause trouble
-    std::for_each(panels.begin(), panels.end(), DeletePointer());
 }
 
+// virtual
 void LLLayoutStack::draw()
 {
     updateLayout();
@@ -284,8 +278,14 @@ void LLLayoutStack::draw()
     }
 }
 
+// virtual
 void LLLayoutStack::deleteAllChildren()
 {
+    for (LLLayoutPanel* p : mPanels)
+    {
+        p->mResizeBar = nullptr;
+    }
+
     mPanels.clear();
     LLView::deleteAllChildren();
 
@@ -295,29 +295,47 @@ void LLLayoutStack::deleteAllChildren()
     mNeedsLayout = true;
 }
 
+// virtual
 void LLLayoutStack::removeChild(LLView* view)
 {
-    LLLayoutPanel* embedded_panelp = findEmbeddedPanel(dynamic_cast<LLPanel*>(view));
+    if (LLLayoutPanel* embedded_panelp = dynamic_cast<LLLayoutPanel*>(view))
+    {
+        auto it = std::find(mPanels.begin(), mPanels.end(), embedded_panelp);
+        if (it != mPanels.end())
+        {
+            mPanels.erase(it);
+        }
+        if (embedded_panelp->mResizeBar)
+        {
+            LLView::removeChild(embedded_panelp->mResizeBar);
+            embedded_panelp->mResizeBar = nullptr;
+        }
+    }
+    else if (LLResizeBar* resize_bar = dynamic_cast<LLResizeBar*>(view))
+    {
+        for (LLLayoutPanel* p : mPanels)
+        {
+            if (p->mResizeBar == resize_bar)
+            {
+                p->mResizeBar = nullptr;
+            }
+        }
+    }
 
-    if (embedded_panelp)
-    {
-        mPanels.erase(std::find(mPanels.begin(), mPanels.end(), embedded_panelp));
-        LLView::removeChild(view);
-        updateFractionalSizes();
-        mNeedsLayout = true;
-    }
-    else
-    {
-        LLView::removeChild(view);
-    }
+    LLView::removeChild(view);
+
+    updateFractionalSizes();
+    mNeedsLayout = true;
 }
 
+// virtual
 bool LLLayoutStack::postBuild()
 {
     updateLayout();
     return true;
 }
 
+// virtual
 bool LLLayoutStack::addChild(LLView* child, S32 tab_group)
 {
     LLLayoutPanel* panelp = dynamic_cast<LLLayoutPanel*>(child);
@@ -983,6 +1001,7 @@ void LLLayoutStack::updatePanelRect( LLLayoutPanel* resized_panel, const LLRect&
     //normalizeFractionalSizes();
 }
 
+// virtual
 void LLLayoutStack::reshape(S32 width, S32 height, bool called_from_parent)
 {
     mNeedsLayout = true;

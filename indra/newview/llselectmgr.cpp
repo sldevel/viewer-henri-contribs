@@ -103,20 +103,12 @@ LLViewerObject* getSelectedParentObject(LLViewerObject *object) ;
 // Consts
 //
 
-const F32 SILHOUETTE_UPDATE_THRESHOLD_SQUARED = 0.02f;
-const S32 MAX_SILS_PER_FRAME = 50;
-const S32 MAX_OBJECTS_PER_PACKET = 254;
+constexpr F32 SILHOUETTE_UPDATE_THRESHOLD_SQUARED = 0.02f;
+constexpr S32 MAX_SILS_PER_FRAME = 50;
+constexpr S32 MAX_OBJECTS_PER_PACKET = 254;
 // For linked sets
-const S32 MAX_CHILDREN_PER_TASK = 255;
+constexpr S32 MAX_CHILDREN_PER_TASK = 255;
 
-//
-// Globals
-//
-
-//bool gDebugSelectMgr = false;
-
-//bool gHideSelectedObjects = false;
-//bool gAllowSelectAvatar = false;
 
 bool LLSelectMgr::sRectSelectInclusive = true;
 bool LLSelectMgr::sRenderHiddenSelections = true;
@@ -128,12 +120,12 @@ F32 LLSelectMgr::sHighlightAlpha = 0.f;
 F32 LLSelectMgr::sHighlightAlphaTest = 0.f;
 F32 LLSelectMgr::sHighlightUAnim = 0.f;
 F32 LLSelectMgr::sHighlightVAnim = 0.f;
-LLColor4 LLSelectMgr::sSilhouetteParentColor;
-LLColor4 LLSelectMgr::sSilhouetteChildColor;
-LLColor4 LLSelectMgr::sHighlightInspectColor;
-LLColor4 LLSelectMgr::sHighlightParentColor;
-LLColor4 LLSelectMgr::sHighlightChildColor;
-LLColor4 LLSelectMgr::sContextSilhouetteColor;
+LLUIColor LLSelectMgr::sSilhouetteParentColor;
+LLUIColor LLSelectMgr::sSilhouetteChildColor;
+LLUIColor LLSelectMgr::sHighlightInspectColor;
+LLUIColor LLSelectMgr::sHighlightParentColor;
+LLUIColor LLSelectMgr::sHighlightChildColor;
+LLUIColor LLSelectMgr::sContextSilhouetteColor;
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // struct LLDeRezInfo
@@ -3141,6 +3133,8 @@ void LLSelectMgr::adjustTexturesByScale(bool send_to_sim, bool stretch)
 
                     F32 scale_x = 1;
                     F32 scale_y = 1;
+                    F32 offset_x = 0;
+                    F32 offset_y = 0;
 
                     for (U32 i = 0; i < LLGLTFMaterial::GLTF_TEXTURE_INFO_COUNT; ++i)
                     {
@@ -3157,6 +3151,21 @@ void LLSelectMgr::adjustTexturesByScale(bool send_to_sim, bool stretch)
                             scale_y = scale_ratio.mV[t_axis] * object_scale.mV[t_axis];
                         }
                         material->mTextureTransform[i].mScale.set(scale_x, scale_y);
+
+                        LLVector2 scales = selectNode->mGLTFScales[te_num][i];
+                        LLVector2 offsets = selectNode->mGLTFOffsets[te_num][i];
+                        F64 int_part = 0;
+                        offset_x = (F32)modf((offsets[VX] + (scales[VX] - scale_x)) / 2, &int_part);
+                        if (offset_x < 0)
+                        {
+                            offset_x++;
+                        }
+                        offset_y = (F32)modf((offsets[VY] + (scales[VY] - scale_y)) / 2, &int_part);
+                        if (offset_y < 0)
+                        {
+                            offset_y++;
+                        }
+                        material->mTextureTransform[i].mOffset.set(offset_x, offset_y);
                     }
 
                     LLFetchedGLTFMaterial* render_mat = (LLFetchedGLTFMaterial*)tep->getGLTFRenderMaterial();
@@ -6437,8 +6446,10 @@ void LLSelectMgr::renderSilhouettes(bool for_hud)
     bool wireframe_selection = (gFloaterTools && gFloaterTools->getVisible()) || LLSelectMgr::sRenderHiddenSelections;
     F32 fogCfx = (F32)llclamp((LLSelectMgr::getInstance()->getSelectionCenterGlobal() - gAgentCamera.getCameraPositionGlobal()).magVec() / (LLSelectMgr::getInstance()->getBBoxOfSelection().getExtentLocal().magVec() * 4), 0.0, 1.0);
 
-    static LLColor4 sParentColor = LLColor4(sSilhouetteParentColor[VRED], sSilhouetteParentColor[VGREEN], sSilhouetteParentColor[VBLUE], LLSelectMgr::sHighlightAlpha);
-    static LLColor4 sChildColor = LLColor4(sSilhouetteChildColor[VRED], sSilhouetteChildColor[VGREEN], sSilhouetteChildColor[VBLUE], LLSelectMgr::sHighlightAlpha);
+    LLColor4 sParentColor = sSilhouetteParentColor;
+    sParentColor.mV[VALPHA] = LLSelectMgr::sHighlightAlpha;
+    LLColor4 sChildColor = sSilhouetteChildColor;
+    sChildColor.mV[VALPHA] = LLSelectMgr::sHighlightAlpha;
 
     auto renderMeshSelection_f = [fogCfx, wireframe_selection](LLSelectNode* node, LLViewerObject* objectp, LLColor4 hlColor)
     {
@@ -6894,6 +6905,8 @@ void LLSelectNode::saveTextureScaleRatios(LLRender::eTexIndex index_to_query)
 {
     mTextureScaleRatios.clear();
     mGLTFScaleRatios.clear();
+    mGLTFScales.clear();
+    mGLTFOffsets.clear();
 
     if (mObject.notNull())
     {
@@ -6934,6 +6947,8 @@ void LLSelectNode::saveTextureScaleRatios(LLRender::eTexIndex index_to_query)
             F32 scale_x = 1;
             F32 scale_y = 1;
             std::vector<LLVector3> material_v_vec;
+            std::vector<LLVector2> material_scales_vec;
+            std::vector<LLVector2> material_offset_vec;
             for (U32 i = 0; i < LLGLTFMaterial::GLTF_TEXTURE_INFO_COUNT; ++i)
             {
                 if (material)
@@ -6941,12 +6956,16 @@ void LLSelectNode::saveTextureScaleRatios(LLRender::eTexIndex index_to_query)
                     LLGLTFMaterial::TextureTransform& transform = material->mTextureTransform[i];
                     scale_x = transform.mScale[VX];
                     scale_y = transform.mScale[VY];
+                    material_scales_vec.push_back(transform.mScale);
+                    material_offset_vec.push_back(transform.mOffset);
                 }
                 else
                 {
                     // Not having an override doesn't mean that there is no material
                     scale_x = 1;
                     scale_y = 1;
+                    material_scales_vec.emplace_back(scale_x, scale_y);
+                    material_offset_vec.emplace_back(0.f, 0.f);
                 }
 
                 if (tep->getTexGen() == LLTextureEntry::TEX_GEN_PLANAR)
@@ -6962,6 +6981,8 @@ void LLSelectNode::saveTextureScaleRatios(LLRender::eTexIndex index_to_query)
                 material_v_vec.push_back(material_v);
             }
             mGLTFScaleRatios.push_back(material_v_vec);
+            mGLTFScales.push_back(material_scales_vec);
+            mGLTFOffsets.push_back(material_offset_vec);
         }
     }
 }
@@ -8006,12 +8027,9 @@ S32 LLObjectSelection::getSelectedObjectRenderCost()
                    cost += object->getRenderCost(textures);
                    computed_objects.insert(object->getID());
 
-                   const_child_list_t children = object->getChildren();
-                   for (const_child_list_t::const_iterator child_iter = children.begin();
-                         child_iter != children.end();
-                         ++child_iter)
+                   const const_child_list_t& children = object->getChildren();
+                   for (LLViewerObject* child_obj : children)
                    {
-                       LLViewerObject* child_obj = *child_iter;
                        LLVOVolume *child = dynamic_cast<LLVOVolume*>( child_obj );
                        if (child)
                        {

@@ -122,8 +122,6 @@ public:
     LLViewerFetchedTexture *findImage(const LLUUID &image_id, ETexListType tex_type);
     LLViewerFetchedTexture *findImage(const LLTextureKey &search_key);
 
-    void dirtyImage(LLViewerFetchedTexture *image);
-
     // Using image stats, determine what images are necessary, and perform image updates.
     void updateImages(F32 max_time);
     void forceImmediateUpdate(LLViewerFetchedTexture* imagep) ;
@@ -142,19 +140,21 @@ public:
     void doPrefetchImages();
 
     void clearFetchingRequests();
-    void setDebugFetching(LLViewerFetchedTexture* tex, S32 debug_level);
 
     // do some book keeping on the specified texture
     // - updates decode priority
     // - updates desired discard level
     // - cleans up textures that haven't been referenced in awhile
-    void updateImageDecodePriority(LLViewerFetchedTexture* imagep);
+    void updateImageDecodePriority(LLViewerFetchedTexture* imagep, bool flush_images = true);
 
 private:
     F32  updateImagesCreateTextures(F32 max_time);
     F32  updateImagesFetchTextures(F32 max_time);
     void updateImagesUpdateStats();
     F32  updateImagesLoadingFastCache(F32 max_time);
+
+    void updateImagesNameTextures();
+    void labelAll();
 
     void addImage(LLViewerFetchedTexture *image, ETexListType tex_type);
     void deleteImage(LLViewerFetchedTexture *image);
@@ -217,14 +217,19 @@ public:
     // images that have been loaded but are waiting to be uploaded to GL
     image_queue_t mCreateTextureList;
 
+    struct NameElement
+    {
+        NameElement(LLViewerFetchedTexture* tex, const std::string& prefix) : mTex(tex), mPrefix(prefix) {}
+        LLViewerFetchedTexture* mTex;
+        std::string mPrefix;
+    };
+    std::vector<NameElement> mNameTextureList;
+
     // images that must be downscaled quickly so we don't run out of memory
     image_queue_t mDownScaleQueue;
 
     image_list_t mCallbackList;
     image_list_t mFastCacheList;
-
-    // Note: just raw pointers because they are never referenced, just compared against
-    std::set<LLViewerFetchedTexture*> mDirtyTextureList;
 
     bool mForceResetTextureStats;
 

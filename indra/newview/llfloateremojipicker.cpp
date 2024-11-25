@@ -57,8 +57,7 @@ static const S32 USED_EMOJIS_IMAGE_INDEX = 0x23F2;
 // https://www.compart.com/en/unicode/U+1F6D1
 static const S32 EMPTY_LIST_IMAGE_INDEX = 0x1F6D1;
 // The following categories should follow the required alphabetic order
-static const std::string RECENTLY_USED_CATEGORY = "1 recently used";
-static const std::string FREQUENTLY_USED_CATEGORY = "2 frequently used";
+static const std::string FREQUENTLY_USED_CATEGORY = "frequently used";
 
 // Floater state related variables
 static std::list<llwchar> sRecentlyUsed;
@@ -186,7 +185,7 @@ public:
     {
         mWStr = LLWString(1, emoji);
         mEmoji = emoji;
-        mTitle = title;
+        mTitle = utf8str_to_wstring(title);
         mBegin = begin;
         mEnd = end;
     }
@@ -203,10 +202,9 @@ public:
         F32 centerY = 0.5f * clientHeight;
         drawIcon(centerX, centerY - 1, iconWidth);
 
-        static LLColor4 defaultColor(0.75f, 0.75f, 0.75f, 1.0f);
-        LLColor4 textColor = LLUIColorTable::instance().getColor("MenuItemEnabledColor", defaultColor);
+        static LLUIColor textColor = LLUIColorTable::instance().getColor("MenuItemEnabledColor", LLColor4(0.75f, 0.75f, 0.75f, 1.0f));
         S32 max_pixels = clientWidth - iconWidth;
-        drawName((F32)iconWidth, centerY, max_pixels, textColor);
+        drawName((F32)iconWidth, centerY, max_pixels, textColor.get());
     }
 
 protected:
@@ -226,16 +224,16 @@ protected:
             max_pixels);                // max_pixels
     }
 
-    void drawName(F32 x, F32 y, S32 max_pixels, LLColor4& color)
+    void drawName(F32 x, F32 y, S32 max_pixels, const LLColor4& color)
     {
         F32 x0 = x;
         F32 x1 = (F32)max_pixels;
         LLFontGL* font = LLFontGL::getFontEmojiLarge();
         if (mBegin)
         {
-            std::string text = mTitle.substr(0, mBegin);
-            font->renderUTF8(
-                text,                          // text
+            LLWString text = mTitle.substr(0, mBegin);
+            font->render(
+                text.c_str(),                          // text
                 0,                             // begin_offset
                 x0,                            // x
                 y,                             // y
@@ -246,14 +244,14 @@ protected:
                 LLFontGL::DROP_SHADOW_SOFT,    // shadow
                 static_cast<S32>(text.size()), // max_chars
                 (S32)x1);                      // max_pixels
-            F32 dx = font->getWidthF32(text);
+            F32 dx = font->getWidthF32(text.c_str());
             x0 += dx;
             x1 -= dx;
         }
         if (x1 > 0 && mEnd > mBegin)
         {
-            std::string text = mTitle.substr(mBegin, mEnd - mBegin);
-            font->renderUTF8(
+            LLWString text = mTitle.substr(mBegin, mEnd - mBegin);
+            font->render(
                 text,                          // text
                 0,                             // begin_offset
                 x0,                            // x
@@ -265,14 +263,14 @@ protected:
                 LLFontGL::DROP_SHADOW_SOFT,    // shadow
                 static_cast<S32>(text.size()), // max_chars
                 (S32)x1);                      // max_pixels
-            F32 dx = font->getWidthF32(text);
+            F32 dx = font->getWidthF32(text.c_str());
             x0 += dx;
             x1 -= dx;
         }
         if (x1 > 0 && mEnd < mTitle.size())
         {
-            std::string text = mEnd ? mTitle.substr(mEnd) : mTitle;
-            font->renderUTF8(
+            LLWString text = mEnd ? mTitle.substr(mEnd) : mTitle;
+            font->render(
                 text,                          // text
                 0,                             // begin_offset
                 x0,                            // x
@@ -290,7 +288,7 @@ protected:
 private:
     llwchar mEmoji;
     LLWString mWStr;
-    std::string mTitle;
+    LLWString mTitle;
     size_t mBegin;
     size_t mEnd;
 };
@@ -429,6 +427,7 @@ void LLFloaterEmojiPicker::fillGroups()
     for (LLButton* button : mGroupButtons)
     {
         mGroups->removeChild(button);
+        button->die();
     }
     mFilteredEmojiGroups.clear();
     mFilteredEmojis.clear();
@@ -436,25 +435,27 @@ void LLFloaterEmojiPicker::fillGroups()
 
     LLButton::Params params;
     params.font = LLFontGL::getFontEmojiLarge();
+    params.name = "all_categories";
 
     LLRect rect;
     rect.mTop = mGroups->getRect().getHeight();
     rect.mBottom = mBadge->getRect().getHeight();
 
     // Create button for "All categories"
+    params.name = "all_categories";
     createGroupButton(params, rect, ALL_EMOJIS_IMAGE_INDEX);
 
-    // Create group and button for "Recently used" and/or "Frequently used"
-    if (!sRecentlyUsed.empty() || !sFrequentlyUsed.empty())
+    // Create group and button for "Frequently used"
+    if (!sFrequentlyUsed.empty())
     {
         std::map<std::string, std::vector<LLEmojiSearchResult>> cats;
-        fillCategoryRecentlyUsed(cats);
         fillCategoryFrequentlyUsed(cats);
 
         if (!cats.empty())
         {
             mFilteredEmojiGroups.push_back(USED_EMOJIS_GROUP_INDEX);
             mFilteredEmojis.emplace_back(cats);
+            params.name = "used_categories";
             createGroupButton(params, rect, USED_EMOJIS_IMAGE_INDEX);
         }
     }
@@ -472,45 +473,12 @@ void LLFloaterEmojiPicker::fillGroups()
         {
             mFilteredEmojiGroups.push_back(i);
             mFilteredEmojis.emplace_back(cats);
+            params.name = "group_" + std::to_string(i);
             createGroupButton(params, rect, groups[i].Character);
         }
     }
 
     resizeGroupButtons();
-}
-
-void LLFloaterEmojiPicker::fillCategoryRecentlyUsed(std::map<std::string, std::vector<LLEmojiSearchResult>>& cats)
-{
-    if (sRecentlyUsed.empty())
-        return;
-
-    std::vector<LLEmojiSearchResult> emojis;
-
-    // In case of empty mFilterPattern we'd use sRecentlyUsed directly
-    if (!mFilterPattern.empty())
-    {
-        // List all emojis in "Recently used"
-        const LLEmojiDictionary::emoji2descr_map_t& emoji2descr = LLEmojiDictionary::instance().getEmoji2Descr();
-        std::size_t begin, end;
-        for (llwchar emoji : sRecentlyUsed)
-        {
-            auto e2d = emoji2descr.find(emoji);
-            if (e2d != emoji2descr.end() && !e2d->second->ShortCodes.empty())
-            {
-                for (const std::string& shortcode : e2d->second->ShortCodes)
-                {
-                if (LLEmojiDictionary::searchInShortCode(begin, end, shortcode, mFilterPattern))
-                {
-                    emojis.emplace_back(emoji, shortcode, begin, end);
-                }
-            }
-        }
-        }
-        if (emojis.empty())
-            return;
-    }
-
-    cats.emplace(std::make_pair(RECENTLY_USED_CATEGORY, emojis));
 }
 
 void LLFloaterEmojiPicker::fillCategoryFrequentlyUsed(std::map<std::string, std::vector<LLEmojiSearchResult>>& cats)
@@ -700,8 +668,7 @@ void LLFloaterEmojiPicker::fillEmojis(bool fromResize)
     LLPanel::Params icon_params;
     LLRect icon_rect(0, icon_size, icon_size, 0);
 
-    static LLColor4 default_color(0.75f, 0.75f, 0.75f, 1.0f);
-    LLColor4 bg_color = LLUIColorTable::instance().getColor("MenuItemHighlightBgColor", default_color);
+    static LLUIColor bg_color = LLUIColorTable::instance().getColor("MenuItemHighlightBgColor", LLColor4(0.75f, 0.75f, 0.75f, 1.0f));
 
     if (!mSelectedGroupIndex)
     {
@@ -754,7 +721,6 @@ void LLFloaterEmojiPicker::fillEmojisCategory(const std::vector<LLEmojiSearchRes
 {
     // Place the category title
     std::string title =
-        category == RECENTLY_USED_CATEGORY ? getString("title_for_recently_used") :
         category == FREQUENTLY_USED_CATEGORY ? getString("title_for_frequently_used") :
         isupper(category.front()) ? category : LLStringUtil::capitalize(category);
     LLEmojiGridDivider* div = new LLEmojiGridDivider(row_panel_params, title);
@@ -767,21 +733,7 @@ void LLFloaterEmojiPicker::fillEmojisCategory(const std::vector<LLEmojiSearchRes
     {
         const LLEmojiDictionary::emoji2descr_map_t& emoji2descr = LLEmojiDictionary::instance().getEmoji2Descr();
         LLEmojiSearchResult emoji { 0, "", 0, 0 };
-        if (category == RECENTLY_USED_CATEGORY)
-        {
-            for (llwchar code : sRecentlyUsed)
-            {
-                const LLEmojiDictionary::emoji2descr_map_t::const_iterator& e2d = emoji2descr.find(code);
-                if (e2d != emoji2descr.end() && !e2d->second->ShortCodes.empty())
-                {
-                    emoji.Character = code;
-                    emoji.String = e2d->second->ShortCodes.front();
-                    createEmojiIcon(emoji, category, row_panel_params, row_list_params, icon_params,
-                        icon_rect, max_icons, bg, row, icon_index);
-                }
-            }
-        }
-        else if (category == FREQUENTLY_USED_CATEGORY)
+        if (category == FREQUENTLY_USED_CATEGORY)
         {
             for (const auto& code : sFrequentlyUsed)
             {

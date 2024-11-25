@@ -89,6 +89,8 @@ public:
     // Returns true if vivox has successfully logged in and is not in error state
     bool isVoiceWorking() const override;
 
+    void setHidden(bool hidden) override;  // virtual
+
     /////////////////////
     /// @name Tuning
     //@{
@@ -118,6 +120,9 @@ public:
 
     void setCaptureDevice(const std::string& name) override;
     void setRenderDevice(const std::string& name) override;
+
+    bool isCaptureNoDevice() override { return false; };
+    bool isRenderNoDevice() override { return false; };
 
     LLVoiceDeviceList& getCaptureDevices() override;
     LLVoiceDeviceList& getRenderDevices() override;
@@ -221,7 +226,8 @@ public:
     void removeObserver(LLVoiceClientParticipantObserver* observer) override;
     //@}
 
-    std::string sipURIFromID(const LLUUID &id) override;
+    std::string sipURIFromID(const LLUUID &id) const override;
+    LLSD getP2PChannelInfoTemplate(const LLUUID& id) const override;
     //@}
 
     /// @name LLVoiceEffectInterface virtual implementations
@@ -706,7 +712,6 @@ private:
 
     std::string mChannelName;           // Name of the channel to be looked up
     sessionStatePtr_t mAudioSession;        // Session state for the current audio session
-    bool mAudioSessionChanged;          // set to true when the above pointer gets changed, so observers can be notified.
 
     sessionStatePtr_t mNextAudioSession;    // Session state for the audio session we're trying to join
 
@@ -748,7 +753,7 @@ private:
     bool switchChannel(std::string uri = std::string(), bool spatial = true, bool no_reconnect = false, bool is_p2p = false, std::string hash = "");
     void joinSession(const sessionStatePtr_t &session);
 
-    std::string nameFromID(const LLUUID &id);
+    std::string nameFromID(const LLUUID &id) const;
     bool IDFromName(const std::string name, LLUUID &uuid);
     std::string sipURIFromAvatar(LLVOAvatar *avatar);
     std::string sipURIFromName(std::string &name);
@@ -760,7 +765,6 @@ private:
     LLSD getAudioSessionChannelInfo();
     std::string getAudioSessionHandle();
 
-    void setHidden(bool hidden) override; //virtual
     void sendPositionAndVolumeUpdate(void);
 
     void sendCaptureAndRenderDevices();
@@ -879,7 +883,6 @@ private:
         bool        mIsNew;
 
         LLFrameTimer    mExpiryTimer;
-        LLFrameTimer    mExpiryWarningTimer;
     };
 
     bool mVoiceFontsReceived;

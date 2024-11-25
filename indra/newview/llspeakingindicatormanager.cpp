@@ -133,6 +133,8 @@ private:
      * @see onChange()
      */
     speaker_ids_t mSwitchedIndicatorsOn;
+
+    boost::signals2::connection mVoiceChannelChanged;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -181,8 +183,8 @@ void SpeakingIndicatorManager::unregisterSpeakingIndicator(const LLUUID& speaker
 //////////////////////////////////////////////////////////////////////////
 SpeakingIndicatorManager::SpeakingIndicatorManager()
 {
-    LLVoiceChannel::setCurrentVoiceChannelChangedCallback(boost::bind(&SpeakingIndicatorManager::sOnCurrentChannelChanged, this, _1));
-    LLVoiceClient::getInstance()->addObserver(this);
+    mVoiceChannelChanged = LLVoiceChannel::setCurrentVoiceChannelChangedCallback(boost::bind(&SpeakingIndicatorManager::sOnCurrentChannelChanged, this, _1));
+    LLVoiceClient::addObserver(this);
 }
 
 SpeakingIndicatorManager::~SpeakingIndicatorManager()
@@ -193,10 +195,7 @@ void SpeakingIndicatorManager::cleanupSingleton()
 {
     // Don't use LLVoiceClient::getInstance() here without a check,
     // singleton MAY have already been destroyed.
-    if (LLVoiceClient::instanceExists())
-    {
-        LLVoiceClient::getInstance()->removeObserver(this);
-    }
+    LLVoiceClient::removeObserver(this);
 }
 
 void SpeakingIndicatorManager::sOnCurrentChannelChanged(const LLUUID& /*session_id*/)

@@ -76,6 +76,7 @@
 #include "llslurl.h"
 #include "llstartup.h"
 #include "llperfstats.h"
+#include "rlvcommon.h"
 
 // Third party library includes
 #include <boost/algorithm/string.hpp>
@@ -263,12 +264,15 @@ static bool handleAnisotropicChanged(const LLSD& newvalue)
 static bool handleVSyncChanged(const LLSD& newvalue)
 {
     LLPerfStats::tunables.vsyncEnabled = newvalue.asBoolean();
-    gViewerWindow->getWindow()->toggleVSync(newvalue.asBoolean());
-
-    if (newvalue.asBoolean())
+    if (gViewerWindow && gViewerWindow->getWindow())
     {
-        U32 current_target = gSavedSettings.getU32("TargetFPS");
-        gSavedSettings.setU32("TargetFPS", std::min((U32)gViewerWindow->getWindow()->getRefreshRate(), current_target));
+        gViewerWindow->getWindow()->toggleVSync(newvalue.asBoolean());
+
+        if (newvalue.asBoolean())
+        {
+            U32 current_target = gSavedSettings.getU32("TargetFPS");
+            gSavedSettings.setU32("TargetFPS", std::min((U32)gViewerWindow->getWindow()->getRefreshRate(), current_target));
+        }
     }
 
     return true;
@@ -716,6 +720,8 @@ void handleLocalTerrainChanged(const LLSD& newValue)
         {
             gLocalTerrainMaterials.setMaterialOverride(i, mat_override);
         }
+        const bool paint_enabled = gSavedSettings.getBOOL("LocalTerrainPaintEnabled");
+        gLocalTerrainMaterials.setPaintType(paint_enabled ? TERRAIN_PAINT_TYPE_PBR_PAINTMAP : TERRAIN_PAINT_TYPE_HEIGHTMAP_WITH_NOISE);
     }
 }
 ////////////////////////////////////////////////////////////////////////////
@@ -764,9 +770,9 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "OctreeAttachmentSizeFactor", handleRepartition);
     setting_setup_signal_listener(gSavedSettings, "RenderMaxTextureIndex", handleSetShaderChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderUIBuffer", handleWindowResized);
+    setting_setup_signal_listener(gSavedSettings, "RenderCAS", handleReleaseGLBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderDepthOfField", handleReleaseGLBufferChanged);
-    setting_setup_signal_listener(gSavedSettings, "RenderFSAASamples", handleReleaseGLBufferChanged);
-    setting_setup_signal_listener(gSavedSettings, "RenderPostProcessingHDR", handleReleaseGLBufferChanged);
+    setting_setup_signal_listener(gSavedSettings, "RenderFSAAType", handleReleaseGLBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderSpecularResX", handleLUTBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderSpecularResY", handleLUTBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderSpecularExponent", handleLUTBufferChanged);
@@ -906,6 +912,8 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "AutoTuneImpostorByDistEnabled", handleUserImpostorByDistEnabledChanged);
     setting_setup_signal_listener(gSavedSettings, "TuningFPSStrategy", handleFPSTuningStrategyChanged);
     {
+        setting_setup_signal_listener(gSavedSettings, "LocalTerrainPaintEnabled", handleSetShaderChanged);
+        setting_setup_signal_listener(gSavedSettings, "LocalTerrainPaintEnabled", handleLocalTerrainChanged);
         const char* transform_suffixes[] = {
             "ScaleU",
             "ScaleV",
@@ -924,8 +932,11 @@ void settings_setup_listeners()
             }
         }
     }
+    setting_setup_signal_listener(gSavedSettings, "TerrainPaintBitDepth", handleSetShaderChanged);
 
     setting_setup_signal_listener(gSavedPerAccountSettings, "AvatarHoverOffsetZ", handleAvatarHoverOffsetChanged);
+
+    setting_setup_signal_listener(gSavedSettings, Rlv::Settings::TopLevelMenu, Rlv::Util::menuToggleVisible);
 }
 
 #if TEST_CACHED_CONTROL

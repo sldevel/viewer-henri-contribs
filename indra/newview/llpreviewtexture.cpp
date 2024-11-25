@@ -129,6 +129,10 @@ void LLPreviewTexture::populateRatioList()
 // virtual
 bool LLPreviewTexture::postBuild()
 {
+    mButtonsPanel = getChild<LLLayoutPanel>("buttons_panel");
+    mDimensionsText = getChild<LLUICtrl>("dimensions");
+    mAspectRatioText = getChild<LLUICtrl>("aspect_ratio");
+
     if (mCopyToInv)
     {
         getChild<LLButton>("Keep")->setLabel(getString("Copy"));
@@ -346,15 +350,20 @@ void LLPreviewTexture::reshape(S32 width, S32 height, bool called_from_parent)
 {
     LLPreview::reshape(width, height, called_from_parent);
 
-    LLRect dim_rect(getChildView("dimensions")->getRect());
-
     S32 horiz_pad = 2 * (LLPANEL_BORDER_WIDTH + PREVIEW_PAD) + PREVIEW_RESIZE_HANDLE_SIZE;
 
     // add space for dimensions and aspect ratio
-    S32 info_height = dim_rect.mTop + CLIENT_RECT_VPAD;
-    if (getChild<LLLayoutPanel>("buttons_panel")->getVisible())
+    S32 info_height = CLIENT_RECT_VPAD;
+
+    if (mDimensionsText)
     {
-        info_height += getChild<LLLayoutPanel>("buttons_panel")->getRect().getHeight();
+        LLRect dim_rect(mDimensionsText->getRect());
+        info_height += dim_rect.mTop;
+    }
+
+    if (mButtonsPanel && mButtonsPanel->getVisible())
+    {
+        info_height += mButtonsPanel->getRect().getHeight();
     }
     LLRect client_rect(horiz_pad, getRect().getHeight(), getRect().getWidth() - horiz_pad, 0);
     client_rect.mTop -= (PREVIEW_HEADER_SIZE + CLIENT_RECT_VPAD);
@@ -404,8 +413,8 @@ void LLPreviewTexture::hideCtrlButtons()
 {
     getChildView("desc txt")->setVisible(false);
     getChildView("desc")->setVisible(false);
-    getChild<LLLayoutStack>("preview_stack")->collapsePanel(getChild<LLLayoutPanel>("buttons_panel"), true);
-    getChild<LLLayoutPanel>("buttons_panel")->setVisible(false);
+    getChild<LLLayoutStack>("preview_stack")->collapsePanel(mButtonsPanel, true);
+    mButtonsPanel->setVisible(false);
     getChild<LLComboBox>("combo_aspect_ratio")->setCurrentByIndex(0); //unconstrained
     reshape(getRect().getWidth(), getRect().getHeight());
 }
@@ -431,6 +440,16 @@ void LLPreviewTexture::onFileLoadedForSave(bool success,
         {
             self->getWindow()->decBusyCount();
             self->mLoadingFullImage = false;
+        }
+        if (!success)
+        {
+            LL_WARNS("FileSaveAs") << "Failed to download file " << *item_uuid << " for saving."
+                << " Is missing: " << (src_vi->isMissingAsset() ? "true" : "false")
+                << " Discard: " << src_vi->getDiscardLevel()
+                << " Raw discard: " << discard_level
+                << " Size: " << src_vi->getWidth() << "x" << src_vi->getHeight()
+                << " Has GL texture: " << (src_vi->hasGLTexture() ? "true" : "false")
+                << " Has saved raw image: " << (src_vi->hasSavedRawImage() ? "true" : "false") << LL_ENDL;
         }
     }
 
@@ -538,8 +557,8 @@ void LLPreviewTexture::updateDimensions()
 
 
     // Update the width/height display every time
-    getChild<LLUICtrl>("dimensions")->setTextArg("[WIDTH]",  llformat("%d", img_width));
-    getChild<LLUICtrl>("dimensions")->setTextArg("[HEIGHT]", llformat("%d", img_height));
+    mDimensionsText->setTextArg("[WIDTH]", llformat("%d", img_width));
+    mDimensionsText->setTextArg("[HEIGHT]", llformat("%d", img_height));
 
     mLastHeight = img_height;
     mLastWidth = img_width;
@@ -554,9 +573,9 @@ void LLPreviewTexture::updateDimensions()
 
         gFloaterView->adjustToFitScreen(this, false);
 
-        LLRect dim_rect(getChildView("dimensions")->getRect());
-        LLRect aspect_label_rect(getChildView("aspect_ratio")->getRect());
-        getChildView("aspect_ratio")->setVisible( dim_rect.mRight < aspect_label_rect.mLeft);
+        LLRect dim_rect(mDimensionsText->getRect());
+        LLRect aspect_label_rect(mAspectRatioText->getRect());
+        mAspectRatioText->setVisible( dim_rect.mRight < aspect_label_rect.mLeft);
     }
 }
 

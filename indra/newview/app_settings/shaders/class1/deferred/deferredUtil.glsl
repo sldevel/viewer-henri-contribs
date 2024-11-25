@@ -75,6 +75,9 @@ const float ONE_OVER_PI = 0.3183098861;
 vec3 srgb_to_linear(vec3 cs);
 vec3 atmosFragLightingLinear(vec3 light, vec3 additive, vec3 atten);
 
+vec4 decodeNormal(vec4 norm);
+
+
 float calcLegacyDistanceAttenuation(float distance, float falloff)
 {
     float dist_atten = 1.0 - clamp((distance + falloff)/(1.0 + falloff), 0.0, 1.0);
@@ -99,10 +102,13 @@ void calcHalfVectors(vec3 lv, vec3 n, vec3 v,
 {
     l  = normalize(lv);
     h  = normalize(l + v);
-    nh = clamp(dot(n, h), 0.0, 1.0);
-    nl = clamp(dot(n, l), 0.0, 1.0);
-    nv = clamp(dot(n, v), 0.0, 1.0);
-    vh = clamp(dot(v, h), 0.0, 1.0);
+
+    // lower bound to avoid divide by zero
+    float eps = 0.000001;
+    nh = clamp(dot(n, h), eps, 1.0);
+    nl = clamp(dot(n, l), eps, 1.0);
+    nv = clamp(dot(n, v), eps, 1.0);
+    vh = clamp(dot(v, h), eps, 1.0);
 
     lightDist = length(lv);
 }
@@ -142,8 +148,7 @@ vec2 getScreenCoordinate(vec2 screenpos)
 
 vec4 getNorm(vec2 screenpos)
 {
-    vec4 norm = texture(normalMap, screenpos.xy);
-    norm.xyz = normalize(norm.xyz);
+    vec4 norm = decodeNormal(texture(normalMap, screenpos.xy));
     return norm;
 }
 

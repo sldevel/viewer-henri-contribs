@@ -56,6 +56,20 @@
 namespace llwebrtc
 {
 
+class LLWebRTCLogCallback
+{
+public:
+    typedef enum {
+        LOG_LEVEL_VERBOSE = 0,
+        LOG_LEVEL_INFO,
+        LOG_LEVEL_WARNING,
+        LOG_LEVEL_ERROR
+    } LogLevel;
+
+    virtual void LogMessage(LogLevel level, const std::string& message) = 0;
+};
+
+
 // LLWebRTCVoiceDevice is a simple representation of the
 // components of a device, used to communicate this
 // information to the viewer.
@@ -136,6 +150,9 @@ class LLWebRTCDeviceInterface
     // set the capture and render devices using the unique identifier for the device
     virtual void setCaptureDevice(const std::string& id) = 0;
     virtual void setRenderDevice(const std::string& id) = 0;
+
+    virtual bool isCaptureNoDevice() = 0;
+    virtual bool isRenderNoDevice() = 0;
 
     // Device observers for device change callbacks.
     virtual void setDevicesObserver(LLWebRTCDevicesObserver *observer) = 0;
@@ -262,7 +279,7 @@ class LLWebRTCPeerConnectionInterface
 // exports.
 
 // This library must be initialized before use.
-LLSYMEXPORT void init();
+LLSYMEXPORT void init(LLWebRTCLogCallback* logSink);
 
 // And should be terminated as part of shutdown.
 LLSYMEXPORT void terminate();

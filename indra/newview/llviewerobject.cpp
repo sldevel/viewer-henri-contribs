@@ -103,7 +103,6 @@
 #include "llfloaterperms.h"
 #include "llvocache.h"
 #include "llcleanup.h"
-#include "llcallstack.h"
 #include "llmeshrepository.h"
 #include "llgltfmateriallist.h"
 #include "llgl.h"
@@ -151,7 +150,6 @@ LLViewerObject *LLViewerObject::createObject(const LLUUID &id, const LLPCode pco
 {
     LL_PROFILE_ZONE_SCOPED;
     LL_DEBUGS("ObjectUpdate") << "creating " << id << LL_ENDL;
-    dumpStack("ObjectUpdateStack");
 
     LLViewerObject *res = NULL;
 
@@ -1165,7 +1163,6 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     LL_DEBUGS_ONCE("SceneLoadTiming") << "Received viewer object data" << LL_ENDL;
 
     LL_DEBUGS("ObjectUpdate") << " mesgsys " << mesgsys << " dp " << dp << " id " << getID() << " update_type " << (S32) update_type << LL_ENDL;
-    dumpStack("ObjectUpdateStack");
 
     // The new OBJECTDATA_FIELD_SIZE_124, OBJECTDATA_FIELD_SIZE_140, OBJECTDATA_FIELD_SIZE_80
     // and OBJECTDATA_FIELD_SIZE_64 lengths should be supported in the existing cases below.
@@ -1521,7 +1518,12 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 S32 size = mesgsys->getSizeFast(_PREHASH_ObjectData, block_num, _PREHASH_ExtraParams);
                 if (size > 0)
                 {
-                    U8 *buffer = new U8[size];
+                    U8 *buffer = new(std::nothrow) U8[size];
+                    if (!buffer)
+                    {
+                        LLError::LLUserWarningMsg::showOutOfMemory();
+                        LL_ERRS() << "Bad memory allocation for buffer, size: " << size << LL_ENDL;
+                    }
                     mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_ExtraParams, buffer, size, block_num);
                     LLDataPackerBinaryBuffer dp(buffer, size);
 
@@ -1940,14 +1942,14 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
                 if(mesgsys != NULL)
                 {
-                LLViewerObjectList::getUUIDFromLocal(parent_uuid,
+                    gObjectList.getUUIDFromLocal(parent_uuid,
                                                         parent_id,
                                                         mesgsys->getSenderIP(),
                                                         mesgsys->getSenderPort());
                 }
                 else
                 {
-                    LLViewerObjectList::getUUIDFromLocal(parent_uuid,
+                    gObjectList.getUUIDFromLocal(parent_uuid,
                                                         parent_id,
                                                         mRegionp->getHost().getAddress(),
                                                         mRegionp->getHost().getPort());
@@ -2062,7 +2064,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
                 // Debugging for suspected problems with local ids.
                 //LLUUID parent_uuid;
-                //LLViewerObjectList::getUUIDFromLocal(parent_uuid, parent_id, mesgsys->getSenderIP(), mesgsys->getSenderPort() );
+                //gObjectList.getUUIDFromLocal(parent_uuid, parent_id, mesgsys->getSenderIP(), mesgsys->getSenderPort() );
                 //if (parent_uuid != cur_parentp->getID() )
                 //{
                 //  LL_ERRS() << "Local ID match but UUID mismatch of viewer object" << LL_ENDL;
@@ -2085,14 +2087,14 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
                     if(mesgsys != NULL)
                     {
-                    LLViewerObjectList::getUUIDFromLocal(parent_uuid,
+                        gObjectList.getUUIDFromLocal(parent_uuid,
                                                         parent_id,
                                                         gMessageSystem->getSenderIP(),
                                                         gMessageSystem->getSenderPort());
                     }
                     else
                     {
-                        LLViewerObjectList::getUUIDFromLocal(parent_uuid,
+                        gObjectList.getUUIDFromLocal(parent_uuid,
                                                         parent_id,
                                                         mRegionp->getHost().getAddress(),
                                                         mRegionp->getHost().getPort());
@@ -2323,6 +2325,12 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
         // Set the rotation of the object followed by adjusting for the accumulated angular velocity (llSetTargetOmega)
         setRotation(new_rot * mAngularVelocityRot);
+        if ((mFlags & FLAGS_SERVER_AUTOPILOT) && asAvatar() && asAvatar()->isSelf())
+        {
+            gAgent.resetAxes();
+            gAgent.rotate(new_rot);
+            gAgentCamera.resetView();
+        }
         setChanged(ROTATED | SILHOUETTE);
     }
 
@@ -2915,24 +2923,33 @@ void LLViewerObject::fetchInventoryFromServer()
         delete mInventory;
         mInventory = NULL;
 
-        // Results in processTaskInv
-        LLMessageSystem* msg = gMessageSystem;
-        msg->newMessageFast(_PREHASH_RequestTaskInventory);
-        msg->nextBlockFast(_PREHASH_AgentData);
-        msg->addUUIDFast(_PREHASH_AgentID, gAgent.getID());
-        msg->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
-        msg->nextBlockFast(_PREHASH_InventoryData);
-        msg->addU32Fast(_PREHASH_LocalID, mLocalID);
-        msg->sendReliable(mRegionp->getHost());
-
         // This will get reset by doInventoryCallback or processTaskInv
         mInvRequestState = INVENTORY_REQUEST_PENDING;
+
+        if (mRegionp && !mRegionp->getCapability("RequestTaskInventory").empty())
+        {
+            LLCoros::instance().launch("LLViewerObject::fetchInventoryFromCapCoro()",
+                                       boost::bind(&LLViewerObject::fetchInventoryFromCapCoro, mID));
+        }
+        else
+        {
+            LL_WARNS() << "Using old task inventory path!" << LL_ENDL;
+            // Results in processTaskInv
+            LLMessageSystem *msg = gMessageSystem;
+            msg->newMessageFast(_PREHASH_RequestTaskInventory);
+            msg->nextBlockFast(_PREHASH_AgentData);
+            msg->addUUIDFast(_PREHASH_AgentID, gAgent.getID());
+            msg->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
+            msg->nextBlockFast(_PREHASH_InventoryData);
+            msg->addU32Fast(_PREHASH_LocalID, mLocalID);
+            msg->sendReliable(mRegionp->getHost());
+        }
     }
 }
 
 void LLViewerObject::fetchInventoryDelayed(const F64 &time_seconds)
 {
-    // unless already waiting, drop previous request and shedule an update
+    // unless already waiting, drop previous request and schedule an update
     if (mInvRequestState != INVENTORY_REQUEST_WAIT)
     {
         if (mInvRequestXFerId != 0)
@@ -2960,6 +2977,80 @@ void LLViewerObject::fetchInventoryDelayedCoro(const LLUUID task_inv, const F64 
         // drop waiting state to unlock isInventoryPending()
         obj->mInvRequestState = INVENTORY_REQUEST_STOPPED;
         obj->fetchInventoryFromServer();
+    }
+}
+
+//static
+void LLViewerObject::fetchInventoryFromCapCoro(const LLUUID task_inv)
+{
+    LLViewerObject *obj = gObjectList.findObject(task_inv);
+    if (obj)
+    {
+        LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+        LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
+                                   httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("TaskInventoryRequest", httpPolicy));
+        LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+        std::string url = obj->mRegionp->getCapability("RequestTaskInventory") + "?task_id=" + obj->mID.asString();
+        // If we already have a copy of the inventory then add it so the server won't re-send something we already have.
+        // We expect this case to crop up in the case of failed inventory mutations, but it might happen otherwise as well.
+        if (obj->mInventorySerialNum && obj->mInventory)
+            url += "&inventory_serial=" + std::to_string(obj->mInventorySerialNum);
+
+        obj->mInvRequestState = INVENTORY_XFER;
+        LLSD result = httpAdapter->getAndSuspend(httpRequest, url);
+
+        LLSD httpResults = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS];
+        LLCore::HttpStatus status = LLCoreHttpUtil::HttpCoroutineAdapter::getStatusFromLLSD(httpResults);
+
+        // Object may have gone away while we were suspended, double-check that it still exists
+        obj = gObjectList.findObject(task_inv);
+        if (!obj)
+        {
+            LL_WARNS() << "Object " << task_inv << " went away while fetching inventory, dropping result" << LL_ENDL;
+            return;
+        }
+
+        bool potentially_stale = false;
+        if (status)
+        {
+            // Dealing with inventory serials is kind of funky. They're monotonically increasing and 16 bits,
+            // so we expect them to overflow, but we can use inv serial < expected serial as a signal that we may
+            // have mutated the task inventory since we kicked off the request, and those mutations may have not
+            // been taken into account yet. Of course, those mutations may have actually failed which would result
+            // in the inv serial never increasing.
+            //
+            // When we detect this case, set the expected inv serial to the inventory serial we actually received
+            // and kick off a re-request after a slight delay.
+            S16 serial = (S16)result["inventory_serial"].asInteger();
+            potentially_stale = serial < obj->mExpectedInventorySerialNum;
+            LL_INFOS() << "Inventory loaded for " << task_inv << LL_ENDL;
+            obj->mInventorySerialNum = serial;
+            obj->mExpectedInventorySerialNum = serial;
+            obj->loadTaskInvLLSD(result);
+        }
+        else if (status.getType() == 304)
+        {
+            LL_INFOS() << "Inventory wasn't changed on server!" << LL_ENDL;
+            obj->mInvRequestState = INVENTORY_REQUEST_STOPPED;
+            // Even though it wasn't necessary to send a response, we still may have mutated
+            // the inventory since we kicked off the request, check for that case.
+            potentially_stale = obj->mInventorySerialNum < obj->mExpectedInventorySerialNum;
+            // Set this to what we already have so that we don't re-request a second time.
+            obj->mExpectedInventorySerialNum = obj->mInventorySerialNum;
+        }
+        else
+        {
+            // Not sure that there's anything sensible we can do to recover here, retrying in a loop would be bad.
+            LL_WARNS() << "Error status while requesting task inventory: " << status.toString() << LL_ENDL;
+            obj->mInvRequestState = INVENTORY_REQUEST_STOPPED;
+        }
+
+        if (potentially_stale)
+        {
+            // Stale? I guess we can use what we got for now, but we'll have to re-request
+            LL_WARNS() << "Stale inv_serial? Re-requesting." << LL_ENDL;
+            obj->fetchInventoryDelayed(INVENTORY_UPDATE_WAIT_TIME_OUTDATED);
+        }
     }
 }
 
@@ -3137,6 +3228,20 @@ void LLViewerObject::processTaskInv(LLMessageSystem* msg, void** user_data)
     // we can receive multiple task updates simultaneously, make sure we will not rewrite newer with older update
     S16 serial = 0;
     msg->getS16Fast(_PREHASH_InventoryData, _PREHASH_Serial, serial);
+
+    if (object->mRegionp && !object->mRegionp->getCapability("RequestTaskInventory").empty())
+    {
+        // It seems that simulator may ask us to re-download the task inventory if an update to the inventory
+        // happened out-of-band while we had the object selected (like if a script is saved.)
+        //
+        // If we're meant to use the HTTP capability, ignore the contents of the UDP message and fetch the
+        // inventory via the CAP so that we don't flow down the UDP inventory request path unconditionally here.
+        // We shouldn't need to wait, as any updates should already be ready to fetch by this point.
+        LL_INFOS() << "Handling unsolicited ReplyTaskInventory for " << task_id << LL_ENDL;
+        object->mExpectedInventorySerialNum = serial;
+        object->fetchInventoryFromServer();
+        return;
+    }
 
     if (serial == object->mInventorySerialNum
         && serial < object->mExpectedInventorySerialNum)
@@ -3343,6 +3448,47 @@ bool LLViewerObject::loadTaskInvFile(const std::string& filename)
     doInventoryCallback();
 
     return true;
+}
+
+void LLViewerObject::loadTaskInvLLSD(const LLSD& inv_result)
+{
+    if (inv_result.has("contents"))
+    {
+        if(mInventory)
+        {
+            mInventory->clear(); // will deref and delete it
+        }
+        else
+        {
+            mInventory = new LLInventoryObject::object_list_t;
+        }
+
+        // Synthesize the "Contents" category, the viewer expects it, but it isn't sent.
+        LLPointer<LLInventoryObject> inv = new LLInventoryObject(mID, LLUUID::null, LLAssetType::AT_CATEGORY, "Contents");
+        mInventory->push_front(inv);
+
+        const LLSD& inventory = inv_result["contents"];
+        for (const auto& inv_entry : llsd::inArray(inventory))
+        {
+            if (inv_entry.has("item_id"))
+            {
+                LLPointer<LLViewerInventoryItem> inv = new LLViewerInventoryItem;
+                inv->unpackMessage(inv_entry);
+                mInventory->push_front(inv);
+            }
+            else
+            {
+                LL_WARNS_ONCE() << "Unknown inventory entry while reading from inventory file. Entry: '"
+                                << inv_entry << "'" << LL_ENDL;
+            }
+        }
+    }
+    else
+    {
+        LL_WARNS() << "unable to load task inventory: " << inv_result << LL_ENDL;
+        return;
+    }
+    doInventoryCallback();
 }
 
 void LLViewerObject::doInventoryCallback()
@@ -4929,11 +5075,10 @@ void LLViewerObject::setNumTEs(const U8 num_tes)
                     if (base_material && override_material)
                     {
                         tep->setGLTFMaterialOverride(new LLGLTFMaterial(*override_material));
-
-                        LLGLTFMaterial* render_material = new LLFetchedGLTFMaterial();
-                        *render_material = *base_material;
-                        render_material->applyOverride(*override_material);
-                        tep->setGLTFRenderMaterial(render_material);
+                    }
+                    if (base_material)
+                    {
+                        initRenderMaterial(i);
                     }
                 }
             }
@@ -5095,8 +5240,7 @@ void LLViewerObject::updateTEMaterialTextures(U8 te)
     LLUUID mat_id = getRenderMaterialID(te);
     if (mat == nullptr && mat_id.notNull())
     {
-        mat = (LLFetchedGLTFMaterial*) gGLTFMaterialList.getMaterial(mat_id);
-        llassert(mat == nullptr || dynamic_cast<LLFetchedGLTFMaterial*>(gGLTFMaterialList.getMaterial(mat_id)) != nullptr);
+        mat = gGLTFMaterialList.getMaterial(mat_id);
         if (mat->isFetching())
         { // material is not loaded yet, rebuild draw info when the object finishes loading
             mat->onMaterialComplete([id=getID()]
@@ -5109,6 +5253,9 @@ void LLViewerObject::updateTEMaterialTextures(U8 te)
                 });
         }
         getTE(te)->setGLTFMaterial(mat);
+        initRenderMaterial(te);
+        mat = (LLFetchedGLTFMaterial*) getTE(te)->getGLTFRenderMaterial();
+        llassert(mat == nullptr || dynamic_cast<LLFetchedGLTFMaterial*>(getTE(te)->getGLTFRenderMaterial()) != nullptr);
     }
     else if (mat_id.isNull() && mat != nullptr)
     {
@@ -5498,6 +5645,42 @@ S32 LLViewerObject::setTEMaterialParams(const U8 te, const LLMaterialPtr pMateri
     return retval;
 }
 
+// Set render material if there are overrides or if the base material is has a
+// baked texture. Otherwise, set it to null.
+// If you are setting the material override and not sending an update message,
+// you should probably call this function.
+S32 LLViewerObject::initRenderMaterial(U8 te)
+{
+    LL_PROFILE_ZONE_SCOPED;
+
+    LLTextureEntry* tep = getTE(te);
+    if (!tep) { return 0; }
+    const LLFetchedGLTFMaterial* base_material = static_cast<LLFetchedGLTFMaterial*>(tep->getGLTFMaterial());
+    llassert(base_material);
+    if (!base_material) { return 0; }
+    const LLGLTFMaterial* override_material = tep->getGLTFMaterialOverride();
+    LLFetchedGLTFMaterial* render_material = nullptr;
+    bool need_render_material = override_material;
+    if (!need_render_material)
+    {
+        for (const LLUUID& texture_id : base_material->mTextureId)
+        {
+            if (LLAvatarAppearanceDefines::LLAvatarAppearanceDictionary::isBakedImageId(texture_id))
+            {
+                need_render_material = true;
+                break;
+            }
+        }
+    }
+    if (need_render_material)
+    {
+        render_material = new LLFetchedGLTFMaterial(*base_material);
+        if (override_material) { render_material->applyOverride(*override_material); }
+        render_material->clearFetchedTextures();
+    }
+    return tep->setGLTFRenderMaterial(render_material);
+}
+
 S32 LLViewerObject::setTEGLTFMaterialOverride(U8 te, LLGLTFMaterial* override_mat)
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -5531,22 +5714,13 @@ S32 LLViewerObject::setTEGLTFMaterialOverride(U8 te, LLGLTFMaterial* override_ma
 
     if (retval)
     {
+        retval = initRenderMaterial(te) | retval;
         if (override_mat)
         {
-            LLFetchedGLTFMaterial* render_mat = new LLFetchedGLTFMaterial(*src_mat);
-            render_mat->applyOverride(*override_mat);
-            tep->setGLTFRenderMaterial(render_mat);
-            retval = TEM_CHANGE_TEXTURE;
-
             for (LLGLTFMaterial::local_tex_map_t::value_type &val : override_mat->mTrackingIdToLocalTexture)
             {
                 LLLocalBitmapMgr::getInstance()->associateGLTFMaterial(val.first, override_mat);
             }
-
-        }
-        else if (tep->setGLTFRenderMaterial(nullptr))
-        {
-            retval = TEM_CHANGE_TEXTURE;
         }
     }
 
@@ -5748,7 +5922,8 @@ LLBBox LLViewerObject::getBoundingBoxAgent() const
     }
 
     if (avatar_parent && avatar_parent->isAvatar() &&
-        root_edit && root_edit->mDrawable.notNull() && root_edit->mDrawable->getXform()->getParent())
+        root_edit && root_edit->mDrawable.notNull() && !root_edit->mDrawable->isDead() &&
+        root_edit->mDrawable->getXform()->getParent())
     {
         LLXform* parent_xform = root_edit->mDrawable->getXform()->getParent();
         position_agent = (getPositionEdit() * parent_xform->getWorldRotation()) + parent_xform->getWorldPosition();
@@ -6017,6 +6192,7 @@ bool LLViewerObject::isParticleSource() const
 
 void LLViewerObject::setParticleSource(const LLPartSysData& particle_parameters, const LLUUID& owner_id)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_VIEWER;
     if (mPartSourcep)
     {
         deleteParticleSource();
@@ -6048,6 +6224,7 @@ void LLViewerObject::setParticleSource(const LLPartSysData& particle_parameters,
 
 void LLViewerObject::unpackParticleSource(const S32 block_num, const LLUUID& owner_id)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_VIEWER;
     if (!mPartSourcep.isNull() && mPartSourcep->isDead())
     {
         mPartSourcep = NULL;
@@ -6083,7 +6260,7 @@ void LLViewerObject::unpackParticleSource(const S32 block_num, const LLUUID& own
             LLViewerTexture* image;
             if (mPartSourcep->mPartSysData.mPartImageID == LLUUID::null)
             {
-                image = LLViewerTextureManager::getFetchedTextureFromFile("pixiesmall.j2c");
+                image = LLViewerFetchedTexture::sDefaultParticleImagep;
             }
             else
             {
@@ -6096,6 +6273,7 @@ void LLViewerObject::unpackParticleSource(const S32 block_num, const LLUUID& own
 
 void LLViewerObject::unpackParticleSource(LLDataPacker &dp, const LLUUID& owner_id, bool legacy)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_VIEWER;
     if (!mPartSourcep.isNull() && mPartSourcep->isDead())
     {
         mPartSourcep = NULL;
@@ -6130,7 +6308,7 @@ void LLViewerObject::unpackParticleSource(LLDataPacker &dp, const LLUUID& owner_
             LLViewerTexture* image;
             if (mPartSourcep->mPartSysData.mPartImageID == LLUUID::null)
             {
-                image = LLViewerTextureManager::getFetchedTextureFromFile("pixiesmall.j2c");
+                image = LLViewerFetchedTexture::sDefaultParticleImagep;
             }
             else
             {
@@ -7274,6 +7452,7 @@ const std::string& LLViewerObject::getAttachmentItemName() const
 //virtual
 LLVOAvatar* LLViewerObject::getAvatar() const
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_AVATAR;
     if (getControlAvatar())
     {
         return getControlAvatar();
@@ -7411,25 +7590,15 @@ void LLViewerObject::setRenderMaterialID(S32 te_in, const LLUUID& id, bool updat
             // the overrides have not changed due to being only texture
             // transforms. Re-apply the overrides to the render material here,
             // if present.
-            const LLGLTFMaterial* override_material = tep->getGLTFMaterialOverride();
-            if (override_material)
+            // Also, sometimes, the material has baked textures, which requires
+            // a copy unique to this object.
+            // Currently, we do not deduplicate render materials.
+            new_material->onMaterialComplete([obj_id = getID(), te]()
             {
-                new_material->onMaterialComplete([obj_id = getID(), te]()
-                    {
-                        LLViewerObject* obj = gObjectList.findObject(obj_id);
-                        if (!obj) { return; }
-                        LLTextureEntry* tep = obj->getTE(te);
-                        if (!tep) { return; }
-                        const LLGLTFMaterial* new_material = tep->getGLTFMaterial();
-                        if (!new_material) { return; }
-                        const LLGLTFMaterial* override_material = tep->getGLTFMaterialOverride();
-                        if (!override_material) { return; }
-                        LLGLTFMaterial* render_material = new LLFetchedGLTFMaterial();
-                        *render_material = *new_material;
-                        render_material->applyOverride(*override_material);
-                        tep->setGLTFRenderMaterial(render_material);
-                    });
-            }
+                LLViewerObject* obj = gObjectList.findObject(obj_id);
+                if (!obj) { return; }
+                obj->initRenderMaterial(te);
+            });
         }
     }
 

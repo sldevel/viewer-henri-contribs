@@ -45,7 +45,7 @@ build_dir_Darwin()
 
 build_dir_Linux()
 {
-  echo build-linux-i686
+  echo build-linux-x86_64
 }
 
 build_dir_CYGWIN()
@@ -146,12 +146,37 @@ pre_build()
     && [ -r "$master_message_template_checkout/message_template.msg" ] \
     && template_verifier_master_url="-DTEMPLATE_VERIFIER_MASTER_URL=file://$master_message_template_checkout/message_template.msg"
 
-    RELEASE_CRASH_REPORTING=ON
-    HAVOK=ON
+    RELEASE_CRASH_REPORTING=OFF
+    HAVOK=OFF
     SIGNING=()
-    if [[ "$arch" == "Darwin" && "$variant" == "Release" ]]
-    then SIGNING=("-DENABLE_SIGNING:BOOL=YES" \
-                  "-DSIGNING_IDENTITY:STRING=Developer ID Application: Linden Research, Inc.")
+    if [[ "$variant" != *OS ]]
+    then
+        # Proprietary builds
+
+        RELEASE_CRASH_REPORTING=ON
+        HAVOK=ON
+
+        if [[ "$arch" == "Darwin" ]]
+        then
+            SIGNING=("-DENABLE_SIGNING:BOOL=YES" \
+                          "-DSIGNING_IDENTITY:STRING=Developer ID Application: Linden Research, Inc.")
+        fi
+    fi
+
+    if [[ "$arch" == "Linux" ]]
+    then
+      # RELEASE_CRASH_REPORTING is tuned on unconditionaly, this is fine but not for Linux as of now (due to missing breakpad/crashpad support)
+      RELEASE_CRASH_REPORTING=OFF
+
+      # Builds turn on HAVOK even when config is ReleaseOS.
+      # This needs AUTOBUILD_GITHUB_TOKEN to be set in the environment. But this is not set for PRs apparently.
+      # Still this seemlingy works on Windows and Mac, why not on the Linux runner? Mystery to be solved elsewhere.
+
+
+      if [[ "$variant" == "ReleaseOS" ]]
+      then
+          HAVOK=OFF
+      fi
     fi
 
     if [ "${RELEASE_CRASH_REPORTING:-}" != "OFF" ]
@@ -170,7 +195,7 @@ pre_build()
         # This name is consumed by indra/newview/CMakeLists.txt. Make it
         # absolute because we've had troubles with relative pathnames.
         abs_build_dir="$(cd "$build_dir"; pwd)"
-        VIEWER_SYMBOL_FILE="$(native_path "$abs_build_dir/newview/$variant/secondlife-symbols-$symplat-${AUTOBUILD_ADDRSIZE}.tar.xz")"
+        VIEWER_SYMBOL_FILE="$(native_path "$abs_build_dir/symbols/$variant/${viewer_channel}.sym.tar.xz")"
     fi
 
     # honor autobuild_configure_parameters same as sling-buildscripts
@@ -187,6 +212,7 @@ pre_build()
      -DVIEWER_CHANNEL:STRING="${viewer_channel}" \
      -DGRID:STRING="\"$viewer_grid\"" \
      -DTEMPLATE_VERIFIER_OPTIONS:STRING="$template_verifier_options" $template_verifier_master_url \
+     $CMAKE_OPTIONS \
      "${SIGNING[@]}" \
     || fatal "$variant configuration failed"
 
@@ -508,15 +534,6 @@ then
   fi
 fi
 
-# Some of the uploads takes a long time to finish in the codeticket backend,
-# causing the next codeticket upload attempt to fail.
-# Inserting this after each potentially large upload may prevent those errors.
-# JJ is making changes to Codeticket that we hope will eliminate this failure, then this can be removed
-wait_for_codeticket()
-{
-    sleep $(( 60 * 6 ))
-}
-
 # check status and upload results to S3
 if $succeeded
 then
@@ -526,9 +543,8 @@ then
     # nat 2016-12-22: without RELEASE_CRASH_REPORTING, we have no symbol file.
     if [ "${RELEASE_CRASH_REPORTING:-}" != "OFF" ]
     then
-        # BugSplat wants to see xcarchive.zip
-        # e.g. build-darwin-x86_64/newview/Release/Second Life Test.xcarchive.zip
-        symbol_file="${build_dir}/newview/${variant}/${viewer_channel}.xcarchive.zip"
+        # e.g. build-darwin-x86_64/symbols/Release/Second Life Test.xarchive.zip
+        symbol_file="${build_dir}/symbols/${variant}/${viewer_channel}.xcarchive.zip"
         if [[ ! -f "$symbol_file" ]]
         then
             # symbol tarball we prep for (e.g.) Breakpad

@@ -247,6 +247,7 @@ LLFloater::LLFloater(const LLSD& key, const LLFloater::Params& p)
     mTitle(p.title),
     mShortTitle(p.short_title),
     mSingleInstance(p.single_instance),
+    mIsReuseInitialized(p.reuse_instance.isProvided()),
     mReuseInstance(p.reuse_instance.isProvided() ? p.reuse_instance : p.single_instance), // reuse single-instance floaters by default
     mKey(key),
     mCanTearOff(p.can_tear_off),
@@ -1205,24 +1206,64 @@ void LLFloater::handleReshape(const LLRect& new_rect, bool by_user)
             {
                 S32 delta_x = 0;
                 S32 delta_y = 0;
+
+                // take translation of dependee floater into account
+                delta_x += new_rect.mLeft - old_rect.mLeft;
+                delta_y += new_rect.mBottom - old_rect.mBottom;
+
                 // check to see if it snapped to right or top, and move if dependee floater is resizing
                 LLRect dependent_rect = floaterp->getRect();
-                if (dependent_rect.mLeft - getRect().mLeft >= old_rect.getWidth() || // dependent on my right?
-                    dependent_rect.mRight == getRect().mLeft + old_rect.getWidth()) // dependent aligned with my right
+                if ((dependent_rect.mLeft - getRect().mLeft >= old_rect.getWidth() || // dependent on my right?
+                     dependent_rect.mRight == getRect().mLeft + old_rect.getWidth()) // dependent aligned with my right
+                    && dependent_rect.mBottom <= old_rect.mTop + 1)
                 {
                     // was snapped directly onto right side or aligned with it
                     delta_x += new_rect.getWidth() - old_rect.getWidth();
+
+                    // make sure dependent still touches floater and din't go too high,
+                    // it can go over edge, but should't detach completely
+                    if (delta_y > 0
+                        && dependent_rect.mBottom + delta_y > new_rect.mTop)
+                    {
+                        delta_y = llmax(new_rect.mTop - dependent_rect.mBottom, 0);
+                    }
                 }
-                if (dependent_rect.mBottom - getRect().mBottom >= old_rect.getHeight() ||
-                    dependent_rect.mTop == getRect().mBottom + old_rect.getHeight())
+                else if (dependent_rect.mRight == old_rect.mLeft)
+                {
+                    // make sure dependent still touches floater and don't go too high
+                    if (delta_y > 0
+                        && dependent_rect.mBottom <= old_rect.mTop
+                        && dependent_rect.mBottom + delta_y > new_rect.mTop)
+                    {
+                        delta_y = llmax(new_rect.mTop - dependent_rect.mBottom, 0);
+                    }
+                }
+
+                if ((dependent_rect.mBottom - getRect().mBottom >= old_rect.getHeight() ||
+                     dependent_rect.mTop == getRect().mBottom + old_rect.getHeight())
+                    && dependent_rect.mLeft <= old_rect.mRight + 1)
                 {
                     // was snapped directly onto top side or aligned with it
                     delta_y += new_rect.getHeight() - old_rect.getHeight();
-                }
 
-                // take translation of dependee floater into account as well
-                delta_x += new_rect.mLeft - old_rect.mLeft;
-                delta_y += new_rect.mBottom - old_rect.mBottom;
+                    // make sure dependent still touches floater
+                    // and din't go too far to the right
+                    if (delta_x > 0
+                        && dependent_rect.mLeft + delta_x > new_rect.mRight)
+                    {
+                        delta_x = llmax(new_rect.mRight - dependent_rect.mLeft, 0);
+                    }
+                }
+                else if (dependent_rect.mTop == old_rect.mBottom)
+                {
+                    // make sure dependent still touches floater and don't go too far to the right
+                    if (delta_x > 0
+                        && dependent_rect.mLeft <= old_rect.mRight
+                        && dependent_rect.mLeft + delta_x > new_rect.mRight)
+                    {
+                        delta_x = llmax(new_rect.mRight - dependent_rect.mLeft, 0);
+                    }
+                }
 
                 dependent_rect.translate(delta_x, delta_y);
                 floaterp->setShape(dependent_rect, by_user);
@@ -1926,6 +1967,14 @@ void LLFloater::onClickClose( LLFloater* self )
     self->onClickCloseBtn();
 }
 
+// static
+void LLFloater::onClickClose(LLFloater* self, bool app_quitting)
+{
+    if (!self)
+        return;
+    self->onClickCloseBtn(app_quitting);
+}
+
 void LLFloater::onClickCloseBtn(bool app_quitting)
 {
     closeFloater(false);
@@ -1935,6 +1984,9 @@ void LLFloater::onClickCloseBtn(bool app_quitting)
 // virtual
 void LLFloater::draw()
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
+    LL_PROFILE_ZONE_TEXT(getTitle().c_str(), getTitle().length());
+
     const F32 alpha = getCurrentTransparency();
 
     // draw background
@@ -1991,21 +2043,6 @@ void LLFloater::draw()
 
     LLPanel::updateDefaultBtn();
 
-    if( getDefaultButton() )
-    {
-        if (hasFocus() && getDefaultButton()->getEnabled())
-        {
-            LLFocusableElement* focus_ctrl = gFocusMgr.getKeyboardFocus();
-            // is this button a direct descendent and not a nested widget (e.g. checkbox)?
-            bool focus_is_child_button = dynamic_cast<LLButton*>(focus_ctrl) != NULL && dynamic_cast<LLButton*>(focus_ctrl)->getParent() == this;
-            // only enable default button when current focus is not a button
-            getDefaultButton()->setBorderEnabled(!focus_is_child_button);
-        }
-        else
-        {
-            getDefaultButton()->setBorderEnabled(false);
-        }
-    }
     if (isMinimized())
     {
         for (S32 i = 0; i < BUTTON_COUNT; i++)
@@ -2129,7 +2166,7 @@ void LLFloater::setCanDrag(bool can_drag)
     }
 }
 
-bool LLFloater::getCanDrag()
+bool LLFloater::getCanDrag() const
 {
     return mDragHandle->getEnabled();
 }
@@ -2239,36 +2276,28 @@ void LLFloater::drawConeToOwner(F32 &context_cone_opacity,
 
         gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
         LLGLEnable(GL_CULL_FACE);
-        gGL.begin(LLRender::QUADS);
+        gGL.begin(LLRender::TRIANGLE_STRIP);
         {
             gGL.color4f(0.f, 0.f, 0.f, contex_cone_in_alpha * context_cone_opacity);
             gGL.vertex2i(owner_rect.mLeft, owner_rect.mTop);
+            gGL.color4f(0.f, 0.f, 0.f, contex_cone_out_alpha * context_cone_opacity);
+            gGL.vertex2i(local_rect.mLeft, local_rect.mTop);
+            gGL.color4f(0.f, 0.f, 0.f, contex_cone_in_alpha * context_cone_opacity);
             gGL.vertex2i(owner_rect.mRight, owner_rect.mTop);
             gGL.color4f(0.f, 0.f, 0.f, contex_cone_out_alpha * context_cone_opacity);
             gGL.vertex2i(local_rect.mRight, local_rect.mTop);
-            gGL.vertex2i(local_rect.mLeft, local_rect.mTop);
-
+            gGL.color4f(0.f, 0.f, 0.f, contex_cone_in_alpha * context_cone_opacity);
+            gGL.vertex2i(owner_rect.mRight, owner_rect.mBottom);
             gGL.color4f(0.f, 0.f, 0.f, contex_cone_out_alpha * context_cone_opacity);
-            gGL.vertex2i(local_rect.mLeft, local_rect.mTop);
-            gGL.vertex2i(local_rect.mLeft, local_rect.mBottom);
+            gGL.vertex2i(local_rect.mRight, local_rect.mBottom);
             gGL.color4f(0.f, 0.f, 0.f, contex_cone_in_alpha * context_cone_opacity);
             gGL.vertex2i(owner_rect.mLeft, owner_rect.mBottom);
+            gGL.color4f(0.f, 0.f, 0.f, contex_cone_out_alpha * context_cone_opacity);
+            gGL.vertex2i(local_rect.mLeft, local_rect.mBottom);
+            gGL.color4f(0.f, 0.f, 0.f, contex_cone_in_alpha * context_cone_opacity);
             gGL.vertex2i(owner_rect.mLeft, owner_rect.mTop);
-
             gGL.color4f(0.f, 0.f, 0.f, contex_cone_out_alpha * context_cone_opacity);
-            gGL.vertex2i(local_rect.mRight, local_rect.mBottom);
-            gGL.vertex2i(local_rect.mRight, local_rect.mTop);
-            gGL.color4f(0.f, 0.f, 0.f, contex_cone_in_alpha * context_cone_opacity);
-            gGL.vertex2i(owner_rect.mRight, owner_rect.mTop);
-            gGL.vertex2i(owner_rect.mRight, owner_rect.mBottom);
-
-
-            gGL.color4f(0.f, 0.f, 0.f, contex_cone_out_alpha * context_cone_opacity);
-            gGL.vertex2i(local_rect.mLeft, local_rect.mBottom);
-            gGL.vertex2i(local_rect.mRight, local_rect.mBottom);
-            gGL.color4f(0.f, 0.f, 0.f, contex_cone_in_alpha * context_cone_opacity);
-            gGL.vertex2i(owner_rect.mRight, owner_rect.mBottom);
-            gGL.vertex2i(owner_rect.mLeft, owner_rect.mBottom);
+            gGL.vertex2i(local_rect.mLeft, local_rect.mTop);
         }
         gGL.end();
     }
@@ -3322,6 +3351,7 @@ void LLFloater::initFromParams(const LLFloater::Params& p)
     mHeaderHeight = p.header_height;
     mLegacyHeaderHeight = p.legacy_header_height;
     mSingleInstance = p.single_instance;
+    mIsReuseInitialized = p.reuse_instance.isProvided();
     mReuseInstance = p.reuse_instance.isProvided() ? p.reuse_instance : p.single_instance;
 
     mDefaultRelativeX = p.rel_x;

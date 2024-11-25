@@ -31,6 +31,7 @@
 #include "llwindowwin32.h"
 
 // LLWindow library includes
+#include "llgamecontrol.h"
 #include "llkeyboardwin32.h"
 #include "lldragdropwin32.h"
 #include "llpreeditor.h"
@@ -163,18 +164,7 @@ HGLRC SafeCreateContext(HDC &hdc)
 
 GLuint SafeChoosePixelFormat(HDC &hdc, const PIXELFORMATDESCRIPTOR *ppfd)
 {
-    __try
-    {
-        return ChoosePixelFormat(hdc, ppfd);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-        // convert to C++ styled exception
-        // C exception don't allow classes, so it's a regular char array
-        char integer_string[32];
-        sprintf(integer_string, "SEH, code: %lu\n", GetExceptionCode());
-        throw std::exception(integer_string);
-    }
+    return LL::seh::catcher([hdc, ppfd]{ return ChoosePixelFormat(hdc, ppfd); });
 }
 
 //static
@@ -413,6 +403,7 @@ struct LLWindowWin32::LLWindowWin32Thread : public LL::ThreadPool
     // until after some graphics setup. See SL-20177. -Cosmic,2023-09-18
     bool mGLReady = false;
     bool mGotGLBuffer = false;
+    bool mShuttingDown = false;
 };
 
 
@@ -427,6 +418,7 @@ LLWindowWin32::LLWindowWin32(LLWindowCallbacks* callbacks,
                              F32 max_gl_version)
     :
     LLWindow(callbacks, fullscreen, flags),
+    mAbsoluteCursorPosition(false),
     mMaxGLVersion(max_gl_version),
     mMaxCores(max_cores)
 {
@@ -805,8 +797,8 @@ LLWindowWin32::LLWindowWin32(LLWindowCallbacks* callbacks,
             size_t name_len = strlen(display_device.DeviceName  );
             size_t desc_len = strlen(display_device.DeviceString);
 
-            CHAR *name = name_len ? display_device.DeviceName   : "???";
-            CHAR *desc = desc_len ? display_device.DeviceString : "???";
+            const CHAR *name = name_len ? display_device.DeviceName   : "???";
+            const CHAR *desc = desc_len ? display_device.DeviceString : "???";
 
             sprintf(text, "Display Device %d: %s, %s", display_index, name, desc);
             LL_INFOS("Window") << text << LL_ENDL;
@@ -993,17 +985,17 @@ bool LLWindowWin32::isValid()
     return (mWindowHandle != NULL);
 }
 
-bool LLWindowWin32::getVisible()
+bool LLWindowWin32::getVisible() const
 {
     return (mWindowHandle && IsWindowVisible(mWindowHandle));
 }
 
-bool LLWindowWin32::getMinimized()
+bool LLWindowWin32::getMinimized() const
 {
     return (mWindowHandle && IsIconic(mWindowHandle));
 }
 
-bool LLWindowWin32::getMaximized()
+bool LLWindowWin32::getMaximized() const
 {
     return (mWindowHandle && IsZoomed(mWindowHandle));
 }
@@ -1028,26 +1020,21 @@ bool LLWindowWin32::maximize()
     return true;
 }
 
-bool LLWindowWin32::getFullscreen()
-{
-    return mFullscreen;
-}
-
-bool LLWindowWin32::getPosition(LLCoordScreen *position)
+bool LLWindowWin32::getPosition(LLCoordScreen *position) const
 {
     position->mX = mRect.left;
     position->mY = mRect.top;
     return true;
 }
 
-bool LLWindowWin32::getSize(LLCoordScreen *size)
+bool LLWindowWin32::getSize(LLCoordScreen *size) const
 {
     size->mX = mRect.right - mRect.left;
     size->mY = mRect.bottom - mRect.top;
     return true;
 }
 
-bool LLWindowWin32::getSize(LLCoordWindow *size)
+bool LLWindowWin32::getSize(LLCoordWindow *size) const
 {
     size->mX = mClientRect.right - mClientRect.left;
     size->mY = mClientRect.bottom - mClientRect.top;
@@ -1630,9 +1617,11 @@ const   S32   max_format  = (S32)num_formats - 1;
     }
     else
     {
-        LLError::LLUserWarningMsg::show(mCallbacks->translateString("MBVideoDrvErr"));
-        // mWindowHandle is 0, going to crash either way
-        LL_ERRS("Window") << "No wgl_ARB_pixel_format extension!" << LL_ENDL;
+        LL_WARNS("Window") << "No wgl_ARB_pixel_format extension!" << LL_ENDL;
+        // cannot proceed without wgl_ARB_pixel_format extension, shutdown same as any other gGLManager.initGL() failure
+        OSMessageBox(mCallbacks->translateString("MBVideoDrvErr"), mCallbacks->translateString("MBError"), OSMB_OK);
+        close();
+        return false;
     }
 
     // Verify what pixel format we actually received.
@@ -1673,6 +1662,11 @@ const   S32   max_format  = (S32)num_formats - 1;
         return false;
     }
 
+    // Setup Tracy gpu context
+    {
+        LL_PROFILER_GPU_CONTEXT;
+    }
+
     // Disable vertical sync for swap
     toggleVSync(enable_vsync);
 
@@ -1703,8 +1697,6 @@ const   S32   max_format  = (S32)num_formats - 1;
         glClear(GL_COLOR_BUFFER_BIT);
         swapBuffers();
     }
-
-    LL_PROFILER_GPU_CONTEXT;
 
     return true;
 }
@@ -1983,7 +1975,7 @@ bool LLWindowWin32::getCursorPosition(LLCoordWindow *position)
     return true;
 }
 
-bool LLWindowWin32::getCursorDelta(LLCoordCommon* delta)
+bool LLWindowWin32::getCursorDelta(LLCoordCommon* delta) const
 {
     if (delta == nullptr)
     {
@@ -2171,7 +2163,7 @@ void LLWindowWin32::delayInputProcessing()
 }
 
 
-void LLWindowWin32::gatherInput()
+void LLWindowWin32::gatherInput(bool app_has_focus)
 {
     ASSERT_MAIN_THREAD();
     LL_PROFILE_ZONE_SCOPED_CATEGORY_WIN32;
@@ -2251,6 +2243,8 @@ void LLWindowWin32::gatherInput()
     mInputProcessingPaused = false;
 
     updateCursor();
+
+    LLGameControl::processEvents(app_has_focus);
 }
 
 static LLTrace::BlockTimerStatHandle FTM_KEYHANDLER("Handle Keyboard");
@@ -3067,6 +3061,7 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
 
                         prev_absolute_x = absolute_x;
                         prev_absolute_y = absolute_y;
+                        window_imp->mAbsoluteCursorPosition = true;
                     }
                     else
                     {
@@ -3083,6 +3078,7 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
                             window_imp->mRawMouseDelta.mX += (S32)round((F32)raw->data.mouse.lLastX * (F32)speed / DEFAULT_SPEED);
                             window_imp->mRawMouseDelta.mY -= (S32)round((F32)raw->data.mouse.lLastY * (F32)speed / DEFAULT_SPEED);
                         }
+                        window_imp->mAbsoluteCursorPosition = false;
                     }
                 }
             }
@@ -3121,7 +3117,7 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
     return ret;
 }
 
-bool LLWindowWin32::convertCoords(LLCoordGL from, LLCoordWindow *to)
+bool LLWindowWin32::convertCoords(LLCoordGL from, LLCoordWindow *to) const
 {
     S32     client_height;
     RECT    client_rect;
@@ -3141,7 +3137,7 @@ bool LLWindowWin32::convertCoords(LLCoordGL from, LLCoordWindow *to)
     return true;
 }
 
-bool LLWindowWin32::convertCoords(LLCoordWindow from, LLCoordGL* to)
+bool LLWindowWin32::convertCoords(LLCoordWindow from, LLCoordGL* to) const
 {
     S32     client_height;
     RECT    client_rect;
@@ -3160,7 +3156,7 @@ bool LLWindowWin32::convertCoords(LLCoordWindow from, LLCoordGL* to)
     return true;
 }
 
-bool LLWindowWin32::convertCoords(LLCoordScreen from, LLCoordWindow* to)
+bool LLWindowWin32::convertCoords(LLCoordScreen from, LLCoordWindow* to) const
 {
     POINT mouse_point;
 
@@ -3177,7 +3173,7 @@ bool LLWindowWin32::convertCoords(LLCoordScreen from, LLCoordWindow* to)
     return result;
 }
 
-bool LLWindowWin32::convertCoords(LLCoordWindow from, LLCoordScreen *to)
+bool LLWindowWin32::convertCoords(LLCoordWindow from, LLCoordScreen *to) const
 {
     POINT mouse_point;
 
@@ -3194,7 +3190,7 @@ bool LLWindowWin32::convertCoords(LLCoordWindow from, LLCoordScreen *to)
     return result;
 }
 
-bool LLWindowWin32::convertCoords(LLCoordScreen from, LLCoordGL *to)
+bool LLWindowWin32::convertCoords(LLCoordScreen from, LLCoordGL *to) const
 {
     LLCoordWindow window_coord;
 
@@ -3208,7 +3204,7 @@ bool LLWindowWin32::convertCoords(LLCoordScreen from, LLCoordGL *to)
     return true;
 }
 
-bool LLWindowWin32::convertCoords(LLCoordGL from, LLCoordScreen *to)
+bool LLWindowWin32::convertCoords(LLCoordGL from, LLCoordScreen *to) const
 {
     LLCoordWindow window_coord;
 
@@ -3327,7 +3323,7 @@ void LLWindowWin32::setMouseClipping( bool b )
     }
 }
 
-bool LLWindowWin32::getClientRectInScreenSpace( RECT* rectp )
+bool LLWindowWin32::getClientRectInScreenSpace( RECT* rectp ) const
 {
     bool success = false;
 
@@ -3371,7 +3367,7 @@ void LLWindowWin32::flashIcon(F32 seconds)
         });
 }
 
-F32 LLWindowWin32::getGamma()
+F32 LLWindowWin32::getGamma() const
 {
     return mCurrentGamma;
 }
@@ -3433,7 +3429,7 @@ void LLWindowWin32::setFSAASamples(const U32 fsaa_samples)
     mFSAASamples = fsaa_samples;
 }
 
-U32 LLWindowWin32::getFSAASamples()
+U32 LLWindowWin32::getFSAASamples() const
 {
     return mFSAASamples;
 }
@@ -3710,6 +3706,10 @@ S32 OSMessageBoxWin32(const std::string& text, const std::string& caption, U32 t
     //
     // "This is why I'm doing it this way, instead of what you would think would be more obvious..."
     // (C) Nat Goodspeed
+    if (!IsWindow(sWindowHandleForMessageBox))
+    {
+        sWindowHandleForMessageBox = NULL;
+    }
     int retval_win = MessageBoxW(sWindowHandleForMessageBox, // HWND
                                  ll_convert_string_to_wide(text).c_str(),
                                  ll_convert_string_to_wide(caption).c_str(),
@@ -3738,6 +3738,23 @@ S32 OSMessageBoxWin32(const std::string& text, const std::string& caption, U32 t
     return retval;
 }
 
+void shell_open(const std::string &file, bool async)
+{
+    std::wstring url_utf16 = ll_convert(file);
+
+    // let the OS decide what to use to open the URL
+    SHELLEXECUTEINFO sei = {sizeof(sei)};
+    // NOTE: this assumes that SL will stick around long enough to complete the DDE message exchange
+    // necessary for ShellExecuteEx to complete
+    if (async)
+    {
+        sei.fMask = SEE_MASK_ASYNCOK;
+    }
+    sei.nShow  = SW_SHOWNORMAL;
+    sei.lpVerb = L"open";
+    sei.lpFile = url_utf16.c_str();
+    ShellExecuteEx(&sei);
+}
 
 void LLWindowWin32::spawnWebBrowser(const std::string& escaped_url, bool async)
 {
@@ -3763,29 +3780,19 @@ void LLWindowWin32::spawnWebBrowser(const std::string& escaped_url, bool async)
     // replaced ShellExecute code with ShellExecuteEx since ShellExecute doesn't work
     // reliablly on Vista.
 
-    // this is madness.. no, this is..
-    LLWString url_wstring = utf8str_to_wstring( escaped_url );
-    llutf16string url_utf16 = wstring_to_utf16str( url_wstring );
+    shell_open(escaped_url, async);
+}
 
-    // let the OS decide what to use to open the URL
-    SHELLEXECUTEINFO sei = { sizeof( sei ) };
-    // NOTE: this assumes that SL will stick around long enough to complete the DDE message exchange
-    // necessary for ShellExecuteEx to complete
-    if (async)
-    {
-        sei.fMask = SEE_MASK_ASYNCOK;
-    }
-    sei.nShow = SW_SHOWNORMAL;
-    sei.lpVerb = L"open";
-    sei.lpFile = url_utf16.c_str();
-    ShellExecuteEx( &sei );
+void LLWindowWin32::openFolder(const std::string &path)
+{
+    shell_open(path, false);
 }
 
 /*
     Make the raw keyboard data available - used to poke through to LLQtWebKit so
     that Qt/Webkit has access to the virtual keycodes etc. that it needs
 */
-LLSD LLWindowWin32::getNativeKeyData()
+LLSD LLWindowWin32::getNativeKeyData() const
 {
     LLSD result = LLSD::emptyMap();
 
@@ -4576,14 +4583,14 @@ inline LLWindowWin32::LLWindowWin32Thread::LLWindowWin32Thread()
 
 void LLWindowWin32::LLWindowWin32Thread::close()
 {
-    if (!mQueue->isClosed())
+    LL::ThreadPool::close();
+    if (!mShuttingDown)
     {
         LL_WARNS() << "Closing window thread without using destroy_window_handler" << LL_ENDL;
-        LL::ThreadPool::close();
-
         // Workaround for SL-18721 in case window closes too early and abruptly
         LLSplashScreen::show();
         LLSplashScreen::update("..."); // will be updated later
+        mShuttingDown = true;
     }
 }
 
@@ -4637,6 +4644,12 @@ private:
 void LLWindowWin32::LLWindowWin32Thread::checkDXMem()
 {
     if (!mGLReady || mGotGLBuffer) { return; }
+
+    if ((gGLManager.mHasAMDAssociations || gGLManager.mHasNVXGpuMemoryInfo) && gGLManager.mVRAM != 0)
+    { // OpenGL already told us the memory budget, don't ask DX
+        mGotGLBuffer = true;
+        return;
+    }
 
     IDXGIFactory4* p_factory = nullptr;
 
@@ -4734,7 +4747,7 @@ void LLWindowWin32::LLWindowWin32Thread::run()
     {
         LL_PROFILE_ZONE_SCOPED_CATEGORY_WIN32;
 
-        // Check memory budget using DirectX
+        // Check memory budget using DirectX if OpenGL doesn't have the means to tell us
         checkDXMem();
 
         if (mWindowHandleThrd != 0)
@@ -4788,6 +4801,8 @@ void LLWindowWin32::LLWindowWin32Thread::wakeAndDestroy()
         LL_WARNS() << "Tried to close Queue. Win32 thread Queue already closed." << LL_ENDL;
         return;
     }
+
+    mShuttingDown = true;
 
     // Make sure we don't leave a blank toolbar button.
     // Also hiding window now prevents user from suspending it

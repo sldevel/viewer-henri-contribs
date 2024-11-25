@@ -80,6 +80,9 @@ void load_exr(const std::string& filename)
         gGL.getTexUnit(0)->bind(gEXRImage);
 
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, width, height, 0, GL_RGBA, GL_FLOAT, out);
+
+        LLImageGLMemory::alloc_tex_image(width, height, GL_RGB16F, 1);
+
         free(out); // release memory of image data
 
         glGenerateMipmap(GL_TEXTURE_2D);
@@ -207,6 +210,7 @@ void LLReflectionMapManager::update()
     }
 
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
+    LL_PROFILE_GPU_ZONE("reflection manager update");
     llassert(!gCubeSnapshot); // assert a snapshot is not in progress
     if (LLAppViewer::instance()->logoutRequestSent())
     {
@@ -460,6 +464,11 @@ void LLReflectionMapManager::update()
 
 LLReflectionMap* LLReflectionMapManager::addProbe(LLSpatialGroup* group)
 {
+    if (gGLManager.mGLVersion < 4.05f)
+    {
+        return nullptr;
+    }
+
     LLReflectionMap* probe = new LLReflectionMap();
     probe->mGroup = group;
 
@@ -674,6 +683,8 @@ void LLReflectionMapManager::doProbeUpdate()
 // In effect this simulates single-bounce lighting.
 void LLReflectionMapManager::updateProbeFace(LLReflectionMap* probe, U32 face)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
+    LL_PROFILE_GPU_ZONE("probe update");
     // hacky hot-swap of camera specific render targets
     gPipeline.mRT = &gPipeline.mAuxillaryRT;
 
@@ -988,6 +999,7 @@ void LLReflectionMapManager::updateUniforms()
     }
 
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
+    LL_PROFILE_GPU_ZONE("rmmu - uniforms")
 
     // structure for packing uniform buffer object
     // see class3/deferred/reflectionProbeF.glsl
@@ -1371,13 +1383,21 @@ void LLReflectionMapManager::initReflectionMaps()
 {
     U32 count = LL_MAX_REFLECTION_PROBE_COUNT;
 
-    if (mTexture.isNull() || mReflectionProbeCount != count || mReset)
+    static LLCachedControl<U32> ref_probe_res(gSavedSettings, "RenderReflectionProbeResolution", 128U);
+    U32 probe_resolution = nhpo2(llclamp(ref_probe_res(), (U32)64, (U32)512));
+    if (mTexture.isNull() || mReflectionProbeCount != count || mProbeResolution != probe_resolution || mReset)
     {
+        if(mProbeResolution != probe_resolution)
+        {
+            mRenderTarget.release();
+            mMipChain.clear();
+        }
+
         gEXRImage = nullptr;
 
         mReset = false;
         mReflectionProbeCount = count;
-        mProbeResolution = nhpo2(llclamp(gSavedSettings.getU32("RenderReflectionProbeResolution"), (U32)64, (U32)512));
+        mProbeResolution = probe_resolution;
         mMaxProbeLOD = log2f((F32)mProbeResolution) - 1.f; // number of mips - 1
 
         if (mTexture.isNull() ||

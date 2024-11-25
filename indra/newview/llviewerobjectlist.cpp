@@ -65,10 +65,10 @@
 #include "lltoolmgr.h"
 #include "lltoolpie.h"
 #include "llkeyboard.h"
+#include "llmeshrepository.h"
 #include "u64.h"
 #include "llviewertexturelist.h"
 #include "lldatapacker.h"
-#include "llcallstack.h"
 #ifdef LL_USESYSTEMLIBS
 #include <zlib.h>
 #else
@@ -99,8 +99,6 @@ extern LLPipeline   gPipeline;
 
 // Statics for object lookup tables.
 U32                     LLViewerObjectList::sSimulatorMachineIndex = 1; // Not zero deliberately, to speed up index check.
-std::map<U64, U32>      LLViewerObjectList::sIPAndPortToIndex;
-std::map<U64, LLUUID>   LLViewerObjectList::sIndexAndLocalIDToUUID;
 
 LLViewerObjectList::LLViewerObjectList()
 {
@@ -138,17 +136,17 @@ void LLViewerObjectList::getUUIDFromLocal(LLUUID &id,
 {
     U64 ipport = (((U64)ip) << 32) | (U64)port;
 
-    U32 index = sIPAndPortToIndex[ipport];
+    U32 index = mIPAndPortToIndex[ipport];
 
     if (!index)
     {
         index = sSimulatorMachineIndex++;
-        sIPAndPortToIndex[ipport] = index;
+        mIPAndPortToIndex[ipport] = index;
     }
 
     U64 indexid = (((U64)index) << 32) | (U64)local_id;
 
-    id = get_if_there(sIndexAndLocalIDToUUID, indexid, LLUUID::null);
+    id = get_if_there(mIndexAndLocalIDToUUID, indexid, LLUUID::null);
 }
 
 U64 LLViewerObjectList::getIndex(const U32 local_id,
@@ -157,7 +155,7 @@ U64 LLViewerObjectList::getIndex(const U32 local_id,
 {
     U64 ipport = (((U64)ip) << 32) | (U64)port;
 
-    U32 index = sIPAndPortToIndex[ipport];
+    U32 index = mIPAndPortToIndex[ipport];
 
     if (!index)
     {
@@ -177,14 +175,14 @@ bool LLViewerObjectList::removeFromLocalIDTable(const LLViewerObject* objectp)
         U32 ip = objectp->getRegion()->getHost().getAddress();
         U32 port = objectp->getRegion()->getHost().getPort();
         U64 ipport = (((U64)ip) << 32) | (U64)port;
-        U32 index = sIPAndPortToIndex[ipport];
+        U32 index = mIPAndPortToIndex[ipport];
 
         // LL_INFOS() << "Removing object from table, local ID " << local_id << ", ip " << ip << ":" << port << LL_ENDL;
 
         U64 indexid = (((U64)index) << 32) | (U64)local_id;
 
-        std::map<U64, LLUUID>::iterator iter = sIndexAndLocalIDToUUID.find(indexid);
-        if (iter == sIndexAndLocalIDToUUID.end())
+        std::map<U64, LLUUID>::iterator iter = mIndexAndLocalIDToUUID.find(indexid);
+        if (iter == mIndexAndLocalIDToUUID.end())
         {
             return false;
         }
@@ -192,7 +190,7 @@ bool LLViewerObjectList::removeFromLocalIDTable(const LLViewerObject* objectp)
         // Found existing entry
         if (iter->second == objectp->getID())
         {   // Full UUIDs match, so remove the entry
-            sIndexAndLocalIDToUUID.erase(iter);
+            mIndexAndLocalIDToUUID.erase(iter);
             return true;
         }
         // UUIDs did not match - this would zap a valid entry, so don't erase it
@@ -210,17 +208,17 @@ void LLViewerObjectList::setUUIDAndLocal(const LLUUID &id,
 {
     U64 ipport = (((U64)ip) << 32) | (U64)port;
 
-    U32 index = sIPAndPortToIndex[ipport];
+    U32 index = mIPAndPortToIndex[ipport];
 
     if (!index)
     {
         index = sSimulatorMachineIndex++;
-        sIPAndPortToIndex[ipport] = index;
+        mIPAndPortToIndex[ipport] = index;
     }
 
     U64 indexid = (((U64)index) << 32) | (U64)local_id;
 
-    sIndexAndLocalIDToUUID[indexid] = id;
+    mIndexAndLocalIDToUUID[indexid] = id;
 
     //LL_INFOS() << "Adding object to table, full ID " << id
     //  << ", local ID " << local_id << ", ip " << ip << ":" << port << LL_ENDL;
@@ -247,7 +245,6 @@ void LLViewerObjectList::processUpdateCore(LLViewerObject* objectp,
     // ignore returned flags
     LL_DEBUGS("ObjectUpdate") << "uuid " << objectp->mID << " calling processUpdateMessage "
                               << objectp << " just_created " << just_created << " from_cache " << from_cache << " msg " << msg << LL_ENDL;
-    dumpStack("ObjectUpdateStack");
 
     objectp->processUpdateMessage(msg, user_data, i, update_type, dpp);
 
@@ -364,7 +361,6 @@ LLViewerObject* LLViewerObjectList::processObjectUpdateFromCache(LLVOCacheEntry*
         objectp = createObjectFromCache(pcode, regionp, fullid, entry->getLocalID());
 
         LL_DEBUGS("ObjectUpdate") << "uuid " << fullid << " created objectp " << objectp << LL_ENDL;
-        dumpStack("ObjectUpdateStack");
 
         if (!objectp)
         {
@@ -407,7 +403,7 @@ void LLViewerObjectList::processObjectUpdate(LLMessageSystem *mesgsys,
 
     LLViewerObject *objectp;
     S32         num_objects;
-    U32         local_id;
+    U32         local_id = 0;
     LLPCode     pcode = 0;
     LLUUID      fullid;
     S32         i;
@@ -559,7 +555,6 @@ void LLViewerObjectList::processObjectUpdate(LLMessageSystem *mesgsys,
         LL_DEBUGS("ObjectUpdate") << "uuid " << fullid << " objectp " << objectp
                                      << " update_cache " << (S32) update_cache << " compressed " << compressed
                                      << " update_type "  << update_type << LL_ENDL;
-        dumpStack("ObjectUpdateStack");
 
         if(update_cache)
         {
@@ -637,7 +632,6 @@ void LLViewerObjectList::processObjectUpdate(LLMessageSystem *mesgsys,
             objectp = createObject(pcode, regionp, fullid, local_id, gMessageSystem->getSender());
 
             LL_DEBUGS("ObjectUpdate") << "creating object " << fullid << " result " << objectp << LL_ENDL;
-            dumpStack("ObjectUpdateStack");
 
             if (!objectp)
             {
@@ -731,7 +725,6 @@ void LLViewerObjectList::processCachedObjectUpdate(LLMessageSystem *mesgsys,
         mesgsys->getU32Fast(_PREHASH_ObjectData, _PREHASH_UpdateFlags, flags, i);
 
         LL_DEBUGS("ObjectUpdate") << "got probe for id " << id << " crc " << crc << LL_ENDL;
-        dumpStack("ObjectUpdateStack");
 
         // Lookup data packer and add this id to cache miss lists if necessary.
         U8 cache_miss_type = LLViewerRegion::CACHE_MISS_TYPE_NONE;
@@ -891,6 +884,7 @@ void LLViewerObjectList::update(LLAgent &agent)
     static std::vector<LLViewerObject*> idle_list;
 
     U32 idle_count = 0;
+    mNumAvatars = 0;
 
     {
         for (std::vector<LLPointer<LLViewerObject> >::iterator active_iter = mActiveObjects.begin();
@@ -908,6 +902,10 @@ void LLViewerObjectList::update(LLAgent &agent)
                     idle_list[idle_count] = objectp;
                 }
                 ++idle_count;
+                if (objectp->isAvatar())
+                {
+                    mNumAvatars++;
+                }
             }
             else
             {   // There shouldn't be any NULL pointers in the list, but they have caused
@@ -1302,7 +1300,6 @@ void LLViewerObjectList::cleanupReferences(LLViewerObject *objectp)
     // Remove from object map so noone can look it up.
 
     LL_DEBUGS("ObjectUpdate") << " dereferencing id " << objectp->mID << LL_ENDL;
-    dumpStack("ObjectUpdateStack");
 
     mUUIDObjectMap.erase(objectp->mID);
 
@@ -1422,6 +1419,10 @@ void LLViewerObjectList::cleanDeadObjects(bool use_timer)
     {
         // No dead objects, don't need to scan object list.
         return;
+    }
+    if ((LLApp::isExiting()) || (mNumDeadObjects == (S32)mObjects.size()))
+    {
+        gMeshRepo.unregisterAllMeshes();
     }
 
     LL_PROFILE_ZONE_SCOPED;
@@ -1717,15 +1718,15 @@ void LLViewerObjectList::clearAllMapObjectsInRegion(LLViewerRegion* regionp)
 
 void LLViewerObjectList::renderObjectsForMap(LLNetMap &netmap)
 {
-    LLColor4 above_water_color = LLUIColorTable::instance().getColor( "NetMapOtherOwnAboveWater" );
-    LLColor4 below_water_color = LLUIColorTable::instance().getColor( "NetMapOtherOwnBelowWater" );
-    LLColor4 you_own_above_water_color =
+    static const LLUIColor above_water_color = LLUIColorTable::instance().getColor( "NetMapOtherOwnAboveWater" );
+    static const LLUIColor below_water_color = LLUIColorTable::instance().getColor( "NetMapOtherOwnBelowWater" );
+    static const LLUIColor you_own_above_water_color =
                         LLUIColorTable::instance().getColor( "NetMapYouOwnAboveWater" );
-    LLColor4 you_own_below_water_color =
+    static const LLUIColor you_own_below_water_color =
                         LLUIColorTable::instance().getColor( "NetMapYouOwnBelowWater" );
-    LLColor4 group_own_above_water_color =
+    static const LLUIColor group_own_above_water_color =
                         LLUIColorTable::instance().getColor( "NetMapGroupOwnAboveWater" );
-    LLColor4 group_own_below_water_color =
+    static const LLUIColor group_own_below_water_color =
                         LLUIColorTable::instance().getColor( "NetMapGroupOwnBelowWater" );
 
     F32 max_radius = gSavedSettings.getF32("MiniMapPrimMaxRadius");
@@ -1755,7 +1756,7 @@ void LLViewerObjectList::renderObjectsForMap(LLNetMap &netmap)
         // See DEV-17370 and DEV-29869/SNOW-79 for details.
         approx_radius = llmin(approx_radius, max_radius);
 
-        LLColor4U color = above_water_color;
+        LLColor4U color = above_water_color.get();
         if( objectp->permYouOwner() )
         {
             const F32 MIN_RADIUS_FOR_OWNED_OBJECTS = 2.f;
@@ -1768,29 +1769,29 @@ void LLViewerObjectList::renderObjectsForMap(LLNetMap &netmap)
             {
                 if ( objectp->permGroupOwner() )
                 {
-                    color = group_own_above_water_color;
+                    color = group_own_above_water_color.get();
                 }
                 else
                 {
-                color = you_own_above_water_color;
+                color = you_own_above_water_color.get();
             }
             }
             else
             {
                 if ( objectp->permGroupOwner() )
                 {
-                    color = group_own_below_water_color;
+                    color = group_own_below_water_color.get();
                 }
             else
             {
-                color = you_own_below_water_color;
+                color = you_own_below_water_color.get();
             }
         }
         }
         else
         if( pos.mdV[VZ] < water_height )
         {
-            color = below_water_color;
+            color = below_water_color.get();
         }
 
         netmap.renderScaledPointGlobal(
@@ -1854,7 +1855,6 @@ LLViewerObject *LLViewerObjectList::createObjectFromCache(const LLPCode pcode, L
     llassert_always(uuid.notNull());
 
     LL_DEBUGS("ObjectUpdate") << "creating " << uuid << " local_id " << local_id << LL_ENDL;
-    dumpStack("ObjectUpdateStack");
 
     LLViewerObject *objectp = LLViewerObject::createObject(uuid, pcode, regionp);
     if (!objectp)
@@ -1890,7 +1890,6 @@ LLViewerObject *LLViewerObjectList::createObject(const LLPCode pcode, LLViewerRe
     }
 
     LL_DEBUGS("ObjectUpdate") << "createObject creating " << fullid << LL_ENDL;
-    dumpStack("ObjectUpdateStack");
 
     LLViewerObject *objectp = LLViewerObject::createObject(fullid, pcode, regionp);
     if (!objectp)

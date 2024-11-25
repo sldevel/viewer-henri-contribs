@@ -211,7 +211,7 @@ LLFolderView::LLFolderView(const Params& p)
     //clear label
     // go ahead and render root folder as usual
     // just make sure the label ("Inventory Folder") never shows up
-    mLabel = LLStringUtil::null;
+    mLabel.clear();
 
     // Escape is handled by reverting the rename, not commiting it (default behavior)
     LLLineEditor::Params params;
@@ -1649,7 +1649,7 @@ void LLFolderView::scrollToShowItem(LLFolderViewItem* item, const LLRect& constr
     {
         LLRect local_rect = item->getLocalRect();
         S32 icon_height = mIcon.isNull() ? 0 : mIcon->getHeight();
-        S32 label_height = getLabelFontForStyle(mLabelStyle)->getLineHeight();
+        S32 label_height = getLabelFont()->getLineHeight();
         // when navigating with keyboard, only move top of opened folder on screen, otherwise show whole folder
         S32 max_height_to_show = item->isOpen() && mScrollContainer->hasFocus() ? (llmax( icon_height, label_height ) + item->getIconPad()) : local_rect.getHeight();
 

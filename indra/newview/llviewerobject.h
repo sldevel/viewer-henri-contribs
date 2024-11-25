@@ -266,7 +266,11 @@ public:
     virtual bool isRiggedMesh() const               { return false; }
     virtual bool hasLightTexture() const            { return false; }
     virtual bool isReflectionProbe() const          { return false; }
+    virtual F32 getReflectionProbeAmbiance() const  { return 0.f; }
+    virtual F32 getReflectionProbeNearClip() const  { return 0.f; }
     virtual bool getReflectionProbeIsBox() const    { return false; }
+    virtual bool getReflectionProbeIsDynamic() const { return false; };
+    virtual bool getReflectionProbeIsMirror() const { return false; };
 
     // This method returns true if the object is over land owned by
     // the agent, one of its groups, or it encroaches and
@@ -385,6 +389,7 @@ public:
     /*virtual*/ S32     setTEGlow(const U8 te, const F32 glow);
     /*virtual*/ S32     setTEMaterialID(const U8 te, const LLMaterialID& pMaterialID);
     /*virtual*/ S32     setTEMaterialParams(const U8 te, const LLMaterialPtr pMaterialParams);
+    S32 initRenderMaterial(const U8 te);
     virtual     S32     setTEGLTFMaterialOverride(U8 te, LLGLTFMaterial* mat);
 
     // Used by Materials update functions to properly kick off rebuilds
@@ -684,6 +689,7 @@ private:
     // forms task inventory request after some time passed, marks request as pending
     void fetchInventoryDelayed(const F64 &time_seconds);
     static void fetchInventoryDelayedCoro(const LLUUID task_inv, const F64 time_seconds);
+    static void fetchInventoryFromCapCoro(const LLUUID task_inv);
 
 public:
     //
@@ -818,6 +824,7 @@ protected:
 
     static void processTaskInvFile(void** user_data, S32 error_code, LLExtStat ext_status);
     bool loadTaskInvFile(const std::string& filename);
+    void loadTaskInvLLSD(const LLSD &inv_result);
     void doInventoryCallback();
 
     bool isOnMap();

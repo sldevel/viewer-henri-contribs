@@ -38,7 +38,6 @@
 #include "llregionhandle.h"
 #include "llsurface.h"
 #include "message.h"
-//#include "vmath.h"
 #include "v3math.h"
 #include "v4math.h"
 
@@ -81,7 +80,6 @@
 #include "llcoros.h"
 #include "lleventcoro.h"
 #include "llcorehttputil.h"
-#include "llcallstack.h"
 #include "llsettingsdaycycle.h"
 
 #include <boost/regex.hpp>
@@ -346,11 +344,10 @@ void LLViewerRegionImpl::requestBaseCapabilitiesCoro(U64 regionHandle)
 
         impl = regionp->getRegionImplNC();
 
-        ++(impl->mSeedCapAttempts);
-
         if (!result.isMap() || result.has("error"))
         {
             LL_WARNS("AppInit", "Capabilities") << "Malformed response" << LL_ENDL;
+            ++(impl->mSeedCapAttempts);
             // setup for retry.
             continue;
         }
@@ -360,6 +357,7 @@ void LLViewerRegionImpl::requestBaseCapabilitiesCoro(U64 regionHandle)
         if (!status)
         {
             LL_WARNS("AppInit", "Capabilities") << "HttpStatus error " << LL_ENDL;
+            ++(impl->mSeedCapAttempts);
             // setup for retry.
             continue;
         }
@@ -370,6 +368,7 @@ void LLViewerRegionImpl::requestBaseCapabilitiesCoro(U64 regionHandle)
         if (id != impl->mHttpResponderID) // region is no longer referring to this request
         {
             LL_WARNS("AppInit", "Capabilities") << "Received results for a stale capabilities request!" << LL_ENDL;
+            ++(impl->mSeedCapAttempts);
             // setup for retry.
             continue;
         }
@@ -1309,12 +1308,15 @@ void LLViewerRegion::updateReflectionProbes(bool full_update)
                 mReflectionMaps[idx] = gPipeline.mReflectionMapManager.addProbe();
             }
 
-            LLVector3 probe_origin = LLVector3(x, y, llmax(water_height, mImpl->mLandp->resolveHeightRegion(x, y)));
-            probe_origin.mV[2] += hover_height;
-            probe_origin += origin;
+            if (mReflectionMaps[idx])
+            {
+                LLVector3 probe_origin = LLVector3(x, y, llmax(water_height, mImpl->mLandp->resolveHeightRegion(x, y)));
+                probe_origin.mV[2] += hover_height;
+                probe_origin += origin;
 
-            mReflectionMaps[idx]->mOrigin.load3(probe_origin.mV);
-            mReflectionMaps[idx]->mRadius = probe_radius;
+                mReflectionMaps[idx]->mOrigin.load3(probe_origin.mV);
+                mReflectionMaps[idx]->mRadius = probe_radius;
+            }
         }
     }
 }
@@ -2495,7 +2497,16 @@ void LLViewerRegion::setSimulatorFeatures(const LLSD& sim_features)
             if (features.has("GLTFEnabled"))
             {
                 bool enabled = features["GLTFEnabled"];
-                gSavedSettings.setBOOL("GLTFEnabled", enabled);
+
+                // call setShaders the first time GLTFEnabled is received as true (causes GLTF specific shaders to be loaded)
+                if (enabled != gSavedSettings.getBOOL("GLTFEnabled"))
+                {
+                    gSavedSettings.setBOOL("GLTFEnabled", enabled);
+                    if (enabled)
+                    {
+                        LLViewerShaderMgr::instance()->setShaders();
+                    }
+                }
             }
             else
             {
@@ -2722,7 +2733,6 @@ LLViewerRegion::eCacheUpdateResult LLViewerRegion::cacheFullUpdate(LLDataPackerB
         if (entry->getCRC() == crc)
         {
             LL_DEBUGS("AnimatedObjects") << " got dupe for local_id " << local_id << LL_ENDL;
-            dumpStack("AnimatedObjectsStack");
 
             // Record a hit
             entry->recordDupe();
@@ -2731,7 +2741,6 @@ LLViewerRegion::eCacheUpdateResult LLViewerRegion::cacheFullUpdate(LLDataPackerB
         else //CRC changed
         {
             LL_DEBUGS("AnimatedObjects") << " got update for local_id " << local_id << LL_ENDL;
-            dumpStack("AnimatedObjectsStack");
 
             // Update the cache entry
             entry->updateEntry(crc, dp);
@@ -2744,7 +2753,6 @@ LLViewerRegion::eCacheUpdateResult LLViewerRegion::cacheFullUpdate(LLDataPackerB
     else
     {
         LL_DEBUGS("AnimatedObjects") << " got first notification for local_id " << local_id << LL_ENDL;
-        dumpStack("AnimatedObjectsStack");
 
         // we haven't seen this object before
         // Create new entry and add to map
@@ -3156,7 +3164,7 @@ void LLViewerRegion::unpackRegionHandshake()
         std::string cap = getCapability("ModifyRegion"); // needed for queueQuery
         if (cap.empty())
         {
-            LLFloaterRegionInfo::sRefreshFromRegion(this);
+            LLFloaterRegionInfo::refreshFromRegion(this);
         }
         else
         {
@@ -3168,7 +3176,7 @@ void LLViewerRegion::unpackRegionHandshake()
                 LLVLComposition* compp = region->getComposition();
                 if (!compp) { return; }
                 compp->apply(composition_changes);
-                LLFloaterRegionInfo::sRefreshFromRegion(region);
+                LLFloaterRegionInfo::refreshFromRegion(region);
             });
         }
     }
@@ -3236,6 +3244,7 @@ void LLViewerRegionImpl::buildCapabilityNames(LLSD& capabilityNames)
     capabilityNames.append("FetchInventory2");
     capabilityNames.append("FetchInventoryDescendents2");
     capabilityNames.append("IncrementCOFVersion");
+    capabilityNames.append("RequestTaskInventory");
     AISAPI::getCapNames(capabilityNames);
 
     capabilityNames.append("InterestList");
@@ -3282,6 +3291,7 @@ void LLViewerRegionImpl::buildCapabilityNames(LLSD& capabilityNames)
     capabilityNames.append("VoiceSignalingRequest");
     capabilityNames.append("ReadOfflineMsgs"); // Requires to respond reliably: AcceptFriendship, AcceptGroupInvite, DeclineFriendship, DeclineGroupInvite
     capabilityNames.append("RegionObjects");
+    capabilityNames.append("RegionSchedule");
     capabilityNames.append("RemoteParcelRequest");
     capabilityNames.append("RenderMaterials");
     capabilityNames.append("RequestTextureDownload");

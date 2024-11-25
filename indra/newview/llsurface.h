@@ -27,7 +27,6 @@
 #ifndef LL_LLSURFACE_H
 #define LL_LLSURFACE_H
 
-//#include "vmath.h"
 #include "v3math.h"
 #include "v3dmath.h"
 #include "v4math.h"
@@ -110,6 +109,7 @@ public:
     LLSurfacePatch *resolvePatchRegion(const F32 x, const F32 y) const;
     LLSurfacePatch *resolvePatchRegion(const LLVector3 &position_region) const;
     LLSurfacePatch *resolvePatchGlobal(const LLVector3d &position_global) const;
+    LLSurfacePatch *getPatch(const S32 x, const S32 y) const;
 
     // Update methods (called during idle, normally)
     template<bool PBR>
@@ -175,8 +175,6 @@ protected:
 
     void createPatchData();     // Allocates memory for patches.
     void destroyPatchData();    // Deallocates memory for patches.
-
-    LLSurfacePatch *getPatch(const S32 x, const S32 y) const;
 
 protected:
     LLVector3d  mOriginGlobal;      // In absolute frame

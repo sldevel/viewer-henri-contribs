@@ -559,17 +559,11 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
         }
         else if (major_version == 3)
         {
-            if (minor_version < 10)
+            if (minor_version <= 29)
             {
-                shader_code_text[shader_code_count++] = strdup("#version 300\n");
-            }
-            else if (minor_version <= 19)
-            {
-                shader_code_text[shader_code_count++] = strdup("#version 310\n");
-            }
-            else if (minor_version <= 29)
-            {
-                shader_code_text[shader_code_count++] = strdup("#version 320\n");
+                // OpenGL 3.2 had GLSL version 1.50.  anything after that the version numbers match.
+                // https://www.khronos.org/opengl/wiki/Core_Language_(GLSL)#OpenGL_and_GLSL_versions
+                shader_code_text[shader_code_count++] = strdup("#version 150\n");
             }
             else
             {
@@ -595,8 +589,15 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
                 extra_code_text[extra_code_count++] = strdup("precision highp float;\n");
             }
         }
+    }
 
-        extra_code_text[extra_code_count++] = strdup("#define FXAA_GLSL_130 1\n");
+    if (type == GL_FRAGMENT_SHADER)
+    {
+        extra_code_text[extra_code_count++] = strdup("#define FRAGMENT_SHADER 1\n");
+    }
+    else
+    {
+        extra_code_text[extra_code_count++] = strdup("#define VERTEX_SHADER 1\n");
     }
 
     // Use alpha float to store bit flags
@@ -1183,8 +1184,9 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("gltf_material_id"); // (GLTF)
 
     mReservedUniforms.push_back("terrain_texture_transforms"); // (GLTF)
+    mReservedUniforms.push_back("terrain_stamp_scale");
 
-    llassert(mReservedUniforms.size() == LLShaderMgr::TERRAIN_TEXTURE_TRANSFORMS +1);
+    llassert(mReservedUniforms.size() == LLShaderMgr::TERRAIN_STAMP_SCALE +1);
 
     mReservedUniforms.push_back("viewport");
 
@@ -1293,9 +1295,6 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("shadow_matrix");
     mReservedUniforms.push_back("env_mat");
     mReservedUniforms.push_back("shadow_clip");
-    mReservedUniforms.push_back("sun_wash");
-    mReservedUniforms.push_back("shadow_noise");
-    mReservedUniforms.push_back("blur_size");
     mReservedUniforms.push_back("ssao_radius");
     mReservedUniforms.push_back("ssao_max_radius");
     mReservedUniforms.push_back("ssao_factor");
@@ -1311,8 +1310,6 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("moon_dir");
     mReservedUniforms.push_back("shadow_res");
     mReservedUniforms.push_back("proj_shadow_res");
-    mReservedUniforms.push_back("depth_cutoff");
-    mReservedUniforms.push_back("norm_cutoff");
     mReservedUniforms.push_back("shadow_target_width");
 
     llassert(mReservedUniforms.size() == LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH + 1);
@@ -1362,9 +1359,7 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("noiseMap");
     mReservedUniforms.push_back("lightFunc");
     mReservedUniforms.push_back("lightMap");
-    mReservedUniforms.push_back("bloomMap");
     mReservedUniforms.push_back("projectionMap");
-    mReservedUniforms.push_back("norm_mat");
 
     mReservedUniforms.push_back("specular_color");
     mReservedUniforms.push_back("env_intensity");
@@ -1409,6 +1404,7 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("detail_3");
 
     mReservedUniforms.push_back("alpha_ramp");
+    mReservedUniforms.push_back("paint_map");
 
     mReservedUniforms.push_back("detail_0_base_color");
     mReservedUniforms.push_back("detail_1_base_color");
@@ -1433,6 +1429,8 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("emissiveColors");
     mReservedUniforms.push_back("minimum_alphas");
 
+    mReservedUniforms.push_back("region_scale");
+
     mReservedUniforms.push_back("origin");
     mReservedUniforms.push_back("display_gamma");
 
@@ -1440,10 +1438,6 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("sun_size");
     mReservedUniforms.push_back("fog_color");
 
-    mReservedUniforms.push_back("transmittance_texture");
-    mReservedUniforms.push_back("scattering_texture");
-    mReservedUniforms.push_back("single_mie_scattering_texture");
-    mReservedUniforms.push_back("irradiance_texture");
     mReservedUniforms.push_back("blend_factor");
     mReservedUniforms.push_back("moisture_level");
     mReservedUniforms.push_back("droplet_radius");
@@ -1466,6 +1460,11 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("moonlight_color");
 
     mReservedUniforms.push_back("debug_normal_draw_length");
+
+    mReservedUniforms.push_back("edgesTex");
+    mReservedUniforms.push_back("areaTex");
+    mReservedUniforms.push_back("searchTex");
+    mReservedUniforms.push_back("blendTex");
 
     llassert(mReservedUniforms.size() == END_RESERVED_UNIFORMS);
 

@@ -39,6 +39,7 @@
 #include "llchicletbar.h"
 #include "lldraghandle.h"
 #include "llemojidictionary.h"
+#include "llemojihelper.h"
 #include "llfloaterreg.h"
 #include "llfloateremojipicker.h"
 #include "llfloaterimsession.h"
@@ -46,6 +47,7 @@
 #include "llfloaterimnearbychat.h"
 #include "llgroupiconctrl.h"
 #include "lllayoutstack.h"
+#include "llnotificationsutil.h"
 #include "llpanelemojicomplete.h"
 #include "lltoolbarview.h"
 
@@ -80,9 +82,10 @@ LLFloaterIMSessionTab::LLFloaterIMSessionTab(const LLSD& session_id)
 {
     setAutoFocus(false);
     mSession = LLIMModel::getInstance()->findIMSession(mSessionID);
+    LLIMMgr::instance().addSessionObserver(this);
 
     mCommitCallbackRegistrar.add("IMSession.Menu.Action",
-            boost::bind(&LLFloaterIMSessionTab::onIMSessionMenuItemClicked,  this, _2));
+            { boost::bind(&LLFloaterIMSessionTab::onIMSessionMenuItemClicked,  this, _2) });
     mEnableCallbackRegistrar.add("IMSession.Menu.CompactExpandedModes.CheckItem",
             boost::bind(&LLFloaterIMSessionTab::onIMCompactExpandedMenuItemCheck, this, _2));
     mEnableCallbackRegistrar.add("IMSession.Menu.ShowModes.CheckItem",
@@ -93,8 +96,8 @@ LLFloaterIMSessionTab::LLFloaterIMSessionTab(const LLSD& session_id)
     // Right click menu handling
     mEnableCallbackRegistrar.add("Avatar.CheckItem",  boost::bind(&LLFloaterIMSessionTab::checkContextMenuItem, this, _2));
     mEnableCallbackRegistrar.add("Avatar.EnableItem", boost::bind(&LLFloaterIMSessionTab::enableContextMenuItem, this, _2));
-    mCommitCallbackRegistrar.add("Avatar.DoToSelected", boost::bind(&LLFloaterIMSessionTab::doToSelected, this, _2));
-    mCommitCallbackRegistrar.add("Group.DoToSelected", boost::bind(&cb_group_do_nothing));
+    mCommitCallbackRegistrar.add("Avatar.DoToSelected", { boost::bind(&LLFloaterIMSessionTab::doToSelected, this, _2) });
+    mCommitCallbackRegistrar.add("Group.DoToSelected", { boost::bind(&cb_group_do_nothing) });
 
     mMinFloaterHeight = getMinHeight();
 }
@@ -102,6 +105,7 @@ LLFloaterIMSessionTab::LLFloaterIMSessionTab(const LLSD& session_id)
 LLFloaterIMSessionTab::~LLFloaterIMSessionTab()
 {
     delete mRefreshTimer;
+    LLIMMgr::instance().removeSessionObserver(this);
 
     LLFloaterIMContainer* im_container = LLFloaterIMContainer::findInstance();
     if (im_container)
@@ -262,6 +266,7 @@ bool LLFloaterIMSessionTab::postBuild()
 {
     bool result;
 
+    mContentsView = getChild<LLView>("contents_view");
     mBodyStack = getChild<LLLayoutStack>("main_stack");
     mParticipantListAndHistoryStack = getChild<LLLayoutStack>("im_panels");
 
@@ -297,10 +302,13 @@ bool LLFloaterIMSessionTab::postBuild()
 
     mEmojiPickerShowBtn = getChild<LLButton>("emoji_picker_show_btn");
     mEmojiPickerShowBtn->setClickedCallback([this](LLUICtrl*, const LLSD&) { onEmojiPickerShowBtnClicked(); });
+    mEmojiPickerShowBtn->setMouseDownCallback([this](LLUICtrl*, const LLSD&) { onEmojiPickerShowBtnDown(); });
+    mEmojiCloseConn = LLEmojiHelper::instance().setCloseCallback([this](LLUICtrl*, const LLSD&) { onEmojiPickerClosed(); });
 
     mGearBtn = getChild<LLButton>("gear_btn");
     mAddBtn = getChild<LLButton>("add_btn");
     mVoiceButton = getChild<LLButton>("voice_call_btn");
+    mVoiceButton->setClickedCallback([this](LLUICtrl*, const LLSD&) { onCallButtonClicked(); });
 
     mParticipantListPanel = getChild<LLLayoutPanel>("speakers_list_panel");
     mRightPartPanel = getChild<LLLayoutPanel>("right_part_holder");
@@ -433,16 +441,39 @@ void LLFloaterIMSessionTab::draw()
 
 void LLFloaterIMSessionTab::enableDisableCallBtn()
 {
-    if (LLVoiceClient::instanceExists() && mVoiceButton)
+    if (!mVoiceButton)
+        return;
+
+    bool enable = false;
+
+    if (mSessionID.notNull()
+        && mSession
+        && mSession->mSessionInitialized
+        && mSession->mCallBackEnabled)
     {
-        mVoiceButton->setEnabled(
-            mSessionID.notNull()
-            && mSession
-            && mSession->mSessionInitialized
-            && LLVoiceClient::getInstance()->voiceEnabled()
-            && LLVoiceClient::getInstance()->isVoiceWorking()
-            && mSession->mCallBackEnabled);
+        if (mVoiceButtonHangUpMode)
+        {
+            // We allow to hang up from any state
+            enable = true;
+        }
+        else
+        {
+            // We allow to start call from this state only
+            if (LLVoiceClient::instanceExists() &&
+                mSession->mVoiceChannel  &&
+                !mSession->mVoiceChannel->callStarted()
+                )
+            {
+                LLVoiceClient* client = LLVoiceClient::getInstance();
+                if (client->voiceEnabled() && client->isVoiceWorking())
+                {
+                    enable = true;
+                }
+            }
+        }
     }
+
+    mVoiceButton->setEnabled(enable);
 }
 
 // virtual
@@ -463,6 +494,22 @@ void LLFloaterIMSessionTab::onFocusLost()
 {
     setBackgroundOpaque(false);
     super::onFocusLost();
+}
+
+void LLFloaterIMSessionTab::onCallButtonClicked()
+{
+    if (mVoiceButtonHangUpMode)
+    {
+        // We allow to hang up from any state
+        gIMMgr->endCall(mSessionID);
+    }
+    else
+    {
+        if (mSession->mVoiceChannel && !mSession->mVoiceChannel->callStarted())
+        {
+            gIMMgr->startCall(mSessionID);
+        }
+    }
 }
 
 void LLFloaterIMSessionTab::onInputEditorClicked()
@@ -489,8 +536,43 @@ void LLFloaterIMSessionTab::onEmojiRecentPanelToggleBtnClicked()
 
 void LLFloaterIMSessionTab::onEmojiPickerShowBtnClicked()
 {
-    mInputEditor->setFocus(true);
-    mInputEditor->showEmojiHelper();
+    if (!mEmojiPickerShowBtn->getToggleState())
+    {
+        mInputEditor->hideEmojiHelper();
+        mInputEditor->setFocus(true);
+        mInputEditor->showEmojiHelper();
+        mEmojiPickerShowBtn->setToggleState(true); // in case hideEmojiHelper closed a visible instance
+    }
+    else
+    {
+        mInputEditor->hideEmojiHelper();
+        mEmojiPickerShowBtn->setToggleState(false);
+    }
+}
+
+void LLFloaterIMSessionTab::onEmojiPickerShowBtnDown()
+{
+    if (mEmojiHelperLastCallbackFrame == LLFrameTimer::getFrameCount())
+    {
+        // Helper gets closed by focus lost event on Down before before onEmojiPickerShowBtnDown
+        // triggers.
+        // If this condition is true, user pressed button and it was 'toggled' during press,
+        // restore 'toggled' state so that button will not reopen helper.
+        mEmojiPickerShowBtn->setToggleState(true);
+    }
+}
+
+void LLFloaterIMSessionTab::onEmojiPickerClosed()
+{
+    if (mEmojiPickerShowBtn->getToggleState())
+    {
+        mEmojiPickerShowBtn->setToggleState(false);
+        // Helper gets closed by focus lost event on Down before onEmojiPickerShowBtnDown
+        // triggers. If mEmojiHelperLastCallbackFrame is set and matches Down, means close
+        // was triggered by user's press.
+        // A bit hacky, but I can't think of a better way to handle this without rewriting helper.
+        mEmojiHelperLastCallbackFrame = LLFrameTimer::getFrameCount();
+    }
 }
 
 void LLFloaterIMSessionTab::initEmojiRecentPanel()
@@ -546,10 +628,27 @@ void LLFloaterIMSessionTab::closeFloater(bool app_quitting)
     super::closeFloater(app_quitting);
 }
 
+void LLFloaterIMSessionTab::deleteAllChildren()
+{
+    super::deleteAllChildren();
+    mVoiceButton = NULL;
+}
+
 std::string LLFloaterIMSessionTab::appendTime()
 {
-    std::string timeStr = "[" + LLTrans::getString("TimeHour") + "]:"
-                          "[" + LLTrans::getString("TimeMin") + "]";
+    std::string timeStr;
+    static bool use_24h = gSavedSettings.getBOOL("Use24HourClock");
+    if (use_24h)
+    {
+        timeStr = "[" + LLTrans::getString("TimeHour") + "]:"
+            "[" + LLTrans::getString("TimeMin") + "]";
+    }
+    else
+    {
+        timeStr = "[" + LLTrans::getString("TimeHour12") + "]:"
+            "[" + LLTrans::getString("TimeMin") + "] ["
+            + LLTrans::getString("TimeAMPM") + "]";
+    }
 
     LLSD substitution;
     substitution["datetime"] = (S32)time_corrected();
@@ -861,7 +960,6 @@ void LLFloaterIMSessionTab::hideOrShowTitle()
 {
     const LLFloater::Params& default_params = LLFloater::getDefaultParams();
     S32 floater_header_size = default_params.header_height;
-    LLView* floater_contents = getChild<LLView>("contents_view");
 
     LLRect floater_rect = getLocalRect();
     S32 top_border_of_contents = floater_rect.mTop - (isTornOff()? floater_header_size : 0);
@@ -869,7 +967,7 @@ void LLFloaterIMSessionTab::hideOrShowTitle()
     LLRect contents_rect (0, top_border_of_contents, floater_rect.mRight, floater_rect.mBottom);
     mDragHandle->setShape(handle_rect);
     mDragHandle->setVisible(isTornOff());
-    floater_contents->setShape(contents_rect);
+    mContentsView->setShape(contents_rect);
 }
 
 void LLFloaterIMSessionTab::updateSessionName(const std::string& name)
@@ -1034,6 +1132,7 @@ void LLFloaterIMSessionTab::updateCallBtnState(bool callIsActive)
 {
     mVoiceButton->setImageOverlay(callIsActive? getString("call_btn_stop") : getString("call_btn_start"));
     mVoiceButton->setToolTip(callIsActive? getString("end_call_button_tooltip") : getString("start_call_button_tooltip"));
+    mVoiceButtonHangUpMode = callIsActive;
 
     enableDisableCallBtn();
 }
@@ -1323,6 +1422,14 @@ LLView* LLFloaterIMSessionTab::getChatHistory()
     return mChatHistory;
 }
 
+void LLFloaterIMSessionTab::sessionRemoved(const LLUUID& session_id)
+{
+    if (session_id == mSessionID)
+    {
+        mSession = nullptr;
+    }
+}
+
 bool LLFloaterIMSessionTab::handleKeyHere(KEY key, MASK mask )
 {
     bool handled = false;
@@ -1347,4 +1454,21 @@ bool LLFloaterIMSessionTab::handleKeyHere(KEY key, MASK mask )
         }
     }
     return handled;
+}
+
+void LLFloaterIMSessionTab::onClickCloseBtn(bool app_quitting)
+{
+    bool is_ad_hoc = (mSession ? mSession->isAdHocSessionType() : false);
+    if (is_ad_hoc && !app_quitting)
+    {
+        LLNotificationsUtil::add("ConfirmLeaveAdhoc", LLSD(), LLSD(), [this](const LLSD& notification, const LLSD& response)
+        {
+            if (0 == LLNotificationsUtil::getSelectedOption(notification, response))
+                closeFloater();
+        });
+    }
+    else
+    {
+        closeFloater();
+    }
 }

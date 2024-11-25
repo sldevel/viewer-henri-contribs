@@ -32,6 +32,7 @@
 #include "llsingleton.h"
 
 // newview
+#include "llinventoryfunctions.h"
 #include "llinventoryitemslist.h"
 #include "llinventorylistitem.h"
 #include "lllistcontextmenu.h"
@@ -104,6 +105,8 @@ protected:
                               bool worn_indication_enabled, const Params& params, bool show_widgets = false);
 
 private:
+    LLButton* mAddWearableBtn = nullptr;
+    LLButton* mRemoveWearableBtn = nullptr;
     bool    mWornIndicationEnabled;
     bool mShowWidgets;
 };
@@ -503,6 +506,13 @@ protected:
     ESortOrder      mSortOrder;
 
     LLWearableType::EType mMenuWearableType;
+};
+
+struct LLFindOutfitItems : public LLInventoryCollectFunctor
+{
+    LLFindOutfitItems() {}
+    virtual ~LLFindOutfitItems() {}
+    virtual bool operator()(LLInventoryCategory *cat, LLInventoryItem *item);
 };
 
 #endif //LL_LLWEARABLEITEMSLIST_H

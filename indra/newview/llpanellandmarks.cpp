@@ -458,10 +458,10 @@ void LLLandmarksPanel::initLandmarksPanel(LLPlacesInventoryPanel* inventory_list
 // List Commands Handlers
 void LLLandmarksPanel::initListCommandsHandlers()
 {
-    mCommitCallbackRegistrar.add("Places.LandmarksGear.Add.Action", boost::bind(&LLLandmarksPanel::onAddAction, this, _2));
-    mCommitCallbackRegistrar.add("Places.LandmarksGear.CopyPaste.Action", boost::bind(&LLLandmarksPanel::onClipboardAction, this, _2));
-    mCommitCallbackRegistrar.add("Places.LandmarksGear.Custom.Action", boost::bind(&LLLandmarksPanel::onCustomAction, this, _2));
-    mCommitCallbackRegistrar.add("Places.LandmarksGear.Folding.Action", boost::bind(&LLLandmarksPanel::onFoldingAction, this, _2));
+    mCommitCallbackRegistrar.add("Places.LandmarksGear.Add.Action", { boost::bind(&LLLandmarksPanel::onAddAction, this, _2) });
+    mCommitCallbackRegistrar.add("Places.LandmarksGear.CopyPaste.Action", { boost::bind(&LLLandmarksPanel::onClipboardAction, this, _2) });
+    mCommitCallbackRegistrar.add("Places.LandmarksGear.Custom.Action", { boost::bind(&LLLandmarksPanel::onCustomAction, this, _2) });
+    mCommitCallbackRegistrar.add("Places.LandmarksGear.Folding.Action", { boost::bind(&LLLandmarksPanel::onFoldingAction, this, _2)} );
     mEnableCallbackRegistrar.add("Places.LandmarksGear.Check", boost::bind(&LLLandmarksPanel::isActionChecked, this, _2));
     mEnableCallbackRegistrar.add("Places.LandmarksGear.Enable", boost::bind(&LLLandmarksPanel::isActionEnabled, this, _2));
     mGearLandmarkMenu = LLUICtrlFactory::getInstance()->createFromFile<LLToggleableMenu>("menu_places_gear_landmark.xml", gMenuHolder, LLViewerMenuHolderGL::child_registry_t::instance());
@@ -647,10 +647,18 @@ bool LLLandmarksPanel::isActionEnabled(const LLSD& userdata) const
 
     if ("collapse_all" == command_name)
     {
+        if (!mCurrentSelectedList)
+        {
+            return false;
+        }
         return has_expanded_folders(mCurrentSelectedList->getRootFolder());
     }
     else if ("expand_all" == command_name)
     {
+        if (!mCurrentSelectedList)
+        {
+            return false;
+        }
         return has_collapsed_folders(mCurrentSelectedList->getRootFolder());
     }
     else if ("sort_by_date" == command_name)
@@ -959,12 +967,12 @@ bool LLLandmarksPanel::canItemBeModified(const std::string& command_name, LLFold
 
     // then ask LLFolderView permissions
 
-    LLFolderView* root_folder = mCurrentSelectedList->getRootFolder();
+    LLFolderView* root_folder = mCurrentSelectedList ? mCurrentSelectedList->getRootFolder() : nullptr;
 
     if ("copy" == command_name)
     {
         // we shouldn't be able to copy folders from My Inventory Panel
-        return can_be_modified && root_folder->canCopy();
+        return can_be_modified && root_folder && root_folder->canCopy();
     }
     else if ("collapse" == command_name)
     {
@@ -981,7 +989,7 @@ bool LLLandmarksPanel::canItemBeModified(const std::string& command_name, LLFold
 
         if ("cut" == command_name)
         {
-            can_be_modified = root_folder->canCut();
+            can_be_modified = root_folder && root_folder->canCut();
         }
         else if ("rename" == command_name)
         {
@@ -993,7 +1001,7 @@ bool LLLandmarksPanel::canItemBeModified(const std::string& command_name, LLFold
         }
         else if("paste" == command_name)
         {
-            can_be_modified = root_folder->canPaste();
+            can_be_modified = root_folder && root_folder->canPaste();
         }
         else
         {

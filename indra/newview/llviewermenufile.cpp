@@ -137,10 +137,10 @@ std::queue<LLFilePickerThread*> LLFilePickerThread::sDeadQ;
 
 void LLFilePickerThread::getFile()
 {
-#if LL_WINDOWS
+#if LL_WINDOWS || (LL_NFD && !LL_DARWIN)
     // Todo: get rid of LLFilePickerThread and make this modeless
     start();
-#elif LL_DARWIN
+#elif LL_DARWIN && !LL_NFD
     runModeless();
 #else
     run();
@@ -150,7 +150,7 @@ void LLFilePickerThread::getFile()
 //virtual
 void LLFilePickerThread::run()
 {
-#if LL_WINDOWS
+#if LL_WINDOWS || (LL_NFD && !LL_DARWIN)
     bool blocking = false;
 #else
     bool blocking = true; // modal
@@ -547,9 +547,11 @@ void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k)
             if (asset_type == LLAssetType::AT_TEXTURE && allow_2k)
             {
                 LLPointer<LLImageFormatted> image_frmted = LLImageFormatted::createFromType(codec);
-                if (gDirUtilp->fileExists(filename) && image_frmted->load(filename))
+                if (gDirUtilp->fileExists(filename) && image_frmted && image_frmted->load(filename))
                 {
-                    expected_upload_cost = LLAgentBenefitsMgr::current().getTextureUploadCost(image_frmted);
+                    S32 biased_width = LLImageRaw::biasedDimToPowerOfTwo(image_frmted->getWidth(), LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
+                    S32 biased_height = LLImageRaw::biasedDimToPowerOfTwo(image_frmted->getHeight(), LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
+                    expected_upload_cost = LLAgentBenefitsMgr::current().getTextureUploadCost(biased_width, biased_height);
                     resource_upload = true;
                 }
             }
@@ -643,16 +645,15 @@ bool get_bulk_upload_expected_cost(
             if (asset_type == LLAssetType::AT_TEXTURE && allow_2k)
             {
                 LLPointer<LLImageFormatted> image_frmted = LLImageFormatted::createFromType(codec);
-                if (gDirUtilp->fileExists(filename) && image_frmted->load(filename))
+                if (gDirUtilp->fileExists(filename) && image_frmted && image_frmted->load(filename))
                 {
-                    total_cost += LLAgentBenefitsMgr::current().getTextureUploadCost(image_frmted);
-                    if (image_frmted)
+                    S32 biased_width = LLImageRaw::biasedDimToPowerOfTwo(image_frmted->getWidth(), LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
+                    S32 biased_height = LLImageRaw::biasedDimToPowerOfTwo(image_frmted->getHeight(), LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
+                    total_cost += LLAgentBenefitsMgr::current().getTextureUploadCost(biased_width, biased_height);
+                    S32 area = biased_width * biased_height;
+                    if (area >= LLAgentBenefits::MIN_2K_TEXTURE_AREA)
                     {
-                        S32 area = image_frmted->getHeight() * image_frmted->getWidth();
-                        if (area >= LLAgentBenefits::MIN_2K_TEXTURE_AREA)
-                        {
-                            textures_2k_count++;
-                        }
+                        textures_2k_count++;
                     }
                     file_count++;
                 }
@@ -905,16 +906,22 @@ class LLFileEnableCloseAllWindows : public view_listener_t
     }
 };
 
+void close_all_windows()
+{
+    bool app_quitting = false;
+    gFloaterView->closeAllChildren(app_quitting);
+    LLFloaterSnapshot *floater_snapshot = LLFloaterSnapshot::findInstance();
+    if (floater_snapshot)
+        floater_snapshot->closeFloater(app_quitting);
+    if (gMenuHolder)
+        gMenuHolder->hideMenus();
+}
+
 class LLFileCloseAllWindows : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
     {
-        bool app_quitting = false;
-        gFloaterView->closeAllChildren(app_quitting);
-        LLFloaterSnapshot* floater_snapshot = LLFloaterSnapshot::findInstance();
-        if (floater_snapshot)
-            floater_snapshot->closeFloater(app_quitting);
-        if (gMenuHolder) gMenuHolder->hideMenus();
+        close_all_windows();
         return true;
     }
 };
@@ -989,7 +996,7 @@ class LLFileQuit : public view_listener_t
 };
 
 
-void handle_compress_image(void*)
+void handle_compress_image()
 {
     LLFilePicker& picker = LLFilePicker::instance();
     if (picker.getMultipleOpenFiles(LLFilePicker::FFLOAD_IMAGE))
@@ -1039,7 +1046,7 @@ size_t get_file_size(std::string &filename)
     return file_length;
 }
 
-void handle_compress_file_test(void*)
+void handle_compress_file_test()
 {
     LLFilePicker& picker = LLFilePicker::instance();
     if (picker.getOpenFile())
